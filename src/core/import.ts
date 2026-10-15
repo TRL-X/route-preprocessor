@@ -62,12 +62,12 @@ export function parseRouteFile(xml: string, fileName: string): ImportedFile {
   if (!format) throw new Error('Only files with a gpx or kml root element are supported.');
   const routes: SourceRoute[] = [];
   const landmarks: SourceLandmark[] = [];
-  const warnings: string[] = [];
+  const warnings: ImportedFile['warnings'] = [];
   let pointCount = 0;
   const fallbackName = cleanLabel(fileName.replace(/\.[^.]+$/, '')) || 'Unnamed route';
   const addRoute = (points: SourcePoint[], name: string, uncertain: boolean) => {
     if (routes.length >= IMPORT_LIMITS.maxRoutes) throw new Error('The file contains more than 256 route segments.');
-    if (points.length < 2) { warnings.push(`“${name}” has fewer than two points and was skipped.`); return; }
+    if (points.length < 2) { warnings.push({ code: 'IMPORT_SHORT_SEGMENT', params: { name } }); return; }
     routes.push({ id: `route-${routes.length + 1}`, name, points, elevationDatum: 0, elevationUncertain: uncertain });
   };
   const countPoint = (point: SourcePoint) => {
@@ -123,9 +123,9 @@ export function parseRouteFile(xml: string, fileName: string): ImportedFile {
       }
     };
     walk(root.kml, fallbackName);
-    if (routes.some((route) => route.points.some((point) => point.elevation !== null))) warnings.push('KML altitude values are candidates. Confirm they represent ground elevation before using them; their vertical datum remains unknown.');
+    if (routes.some((route) => route.points.some((point) => point.elevation !== null))) warnings.push({ code: 'IMPORT_KML_ELEVATION' });
   }
   if (!routes.length) throw new Error('No continuous route segment with at least two points was found.');
-  if (routes.length > 1) warnings.push(`Found ${routes.length} separate route segments. Select one to process; discontinuities are never automatically joined.`);
+  if (routes.length > 1) warnings.push({ code: 'IMPORT_MULTIPLE_SEGMENTS', params: { count: routes.length } });
   return { fileName, format, routes, landmarks, warnings };
 }

@@ -13,3 +13,5 @@
 .panel-body{border:0;margin:0;min-width:0}.panel-body>*{flex-shrink:0}
 
 .stage-row .stage-climb{color:#6e8754;display:flex;gap:10px}.stage-climb span{color:#a39876}
+
+.language-button select{border:0;background:transparent;color:inherit;font:inherit;max-width:140px;min-height:32px;cursor:pointer}.language-button:focus-within{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}

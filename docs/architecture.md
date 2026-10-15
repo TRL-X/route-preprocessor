@@ -2,7 +2,7 @@
 
 本项目是一个 **React + TypeScript + Vite 的静态单页应用**，根目录一份 `package.json`，没有 monorepo/workspace、多包构建、服务端渲染或业务后端。构建命令为 `npm run build`，静态产物在 `dist`，可作为 Vercel 的 Vite 项目部署。构建目标为 ES2022。
 
-产品面向全球用户，提供英文/中文界面；手机和电脑共用同一套编辑数据与操作，不单独维护移动端业务逻辑。核心算法不依赖 React、地图 SDK 或浏览器 DOM。
+产品面向全球用户，界面语言由独立资源文件注册，当前包含英文与简体中文；手机和电脑共用同一套编辑数据与操作，不单独维护移动端业务逻辑。核心算法不依赖 React、地图 SDK 或浏览器 DOM。
 
 ## 目录与依赖方向
 
@@ -12,6 +12,7 @@
 | `src/app/flow.ts` | XState 管理 import / route / stations / elevation / preview / export 的当前步骤。 |
 | `src/app/worker-client.ts` | 创建单次 Worker 任务、接收结果、结束或取消 Worker。 |
 | `src/app/drafts.ts` | IndexedDB 草稿保存及跨标签页的导出修订号预留。 |
+| `src/i18n` | i18next 配置、资源自动发现、语言偏好、数字格式化和类型安全的翻译接口。 |
 | `src/features/import`、`src/features/review` | 导入入口、处理提示与阶段列表，通过类型明确的属性接收数据和回调。 |
 | `src/components/RouteMap.tsx` | MapLibre 地图、路线/站点显示、触控与鼠标游标交互。 |
 | `src/components/ElevationChart.tsx` | 高程与进度显示、游标联动；不改写计算剖面。 |
@@ -69,7 +70,8 @@ XState 当前仅管理步骤导航。业务有效性由 `processRoute`、当前�
 
 - `code` 是稳定的机器可读分类。
 - `severity: 'warning'` 提醒核对或解释处理结果；`'error'` 阻止生成 `RouteData`。
-- `message` 为英文；已本地化的处理问题另有 `messageZh`。
+- `params` 保存数量、站点名称等语言无关的插值参数；界面按 `code` 从语言资源中翻译，不在核心层组装文案。
+- 可选 `message` 用于未知异常和旧草稿的原始诊断回退，不再存在语言专用字段。
 - 可选 `s` 为参考里程，供界面定位。
 
 RTE/CBOR 使用 `RteError`，分类如下：
@@ -83,6 +85,8 @@ RTE/CBOR 使用 `RteError`，分类如下：
 | `range` | 剖面查询里程超出范围。 |
 
 Worker 对抛出的异常返回 `{ ok: false, error: message }`，当前不跨 Worker 传递 `RteError.code`；`ProcessingResult` 中的结构化 issues 则完整返回。取消由客户端使用 `AbortError` 表示。
+
+导入警告也使用 `code + params`。质量报告保留这些稳定字段，同时包含导出报告时的语言和可读解释；它们不影响 RTE 编码。语言资源的扩展规则见 [国际化维护说明](i18n.md)。
 
 RTE 当前预算为单文件 64 MiB、目录 256 项、GEOM/ELEV/GIDX 各 1,000,000 条记录；CBOR 为 8 MiB、深度 16、总 item 200,000、单容器 100,000 项。它们与导入/预处理预算分开维护，并与规范允许的最大范围区分。实际应用的 GEOM/ELEV 生成预算更小，见 [预处理策略](preprocessing.md)。
 

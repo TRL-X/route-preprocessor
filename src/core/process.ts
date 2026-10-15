@@ -7,39 +7,9 @@ const EARTH_RADIUS_M = 6_371_008.8;
 const RAD = Math.PI / 180;
 const UINT32_MAX = 0xffff_ffff;
 const encoder = new TextEncoder();
-const issueText: Record<string, string> = {
-  ROUTE_TOO_SHORT: 'The cleaned route needs at least two distinct points and a length of 0.1 m.',
-  DUPLICATE_COORDINATES: 'Consecutive duplicate coordinates were merged without changing traversal order.',
-  ELEVATION_CONFLICT: 'Conflicting elevations at repeated coordinates are marked missing. Explicitly fill short gaps or omit elevation.',
-  ELEVATION_MISSING: 'Some route points have no elevation. Zero elevation is preserved as valid data.',
-  LARGE_SOURCE_EDGE: 'Some adjacent source coordinates are more than 1 km apart. Check their connections on the map.',
-  GEOMETRY_RESOURCE_LIMIT: 'This route requires too many geometry nodes for the browser processing budget.',
-  GEOMETRY_QUANTIZATION_COLLISION: 'Stage boundaries cannot be represented by distinct E7 geometry nodes. Move a boundary or disable its stage split.',
-  GEOMETRY_QUANTIZATION_MERGE: 'Coincident geometry nodes were resolved after coordinate quantization.',
-  INCOMPLETE_ELEVATION: 'A complete elevation profile is unavailable. Only explicitly requested interior gaps of at most 100 m can be filled; endpoints and longer gaps cannot be extrapolated.',
-  PROFILE_RESOURCE_LIMIT: 'Elevation sampling exceeds 200,000 nodes. Increase the sampling interval.',
-  ELEVATION_RANGE: 'An elevation value exceeds the RTE signed 32-bit decimeter range.',
-  ELEVATION_TOTAL_RANGE: 'Cumulative ascent or descent exceeds the RTE unsigned 32-bit decimeter range.',
-  ELEVATION_FILLED: 'Interior elevation gaps of at most 100 m were explicitly filled by distance-based linear interpolation.',
-  IDENTITY_INVALID: 'The route identity or revision is invalid.',
-  ROUTE_NAME_INVALID: 'The route name must contain 1–96 UTF-8 bytes and no control characters.',
-  SOURCE_HASH_INVALID: 'The source SHA-256 must contain exactly 32 bytes.',
-  DISTANCE_RANGE: 'The route distance is outside the RTE range.',
-  OPTIONS_INVALID: 'Invalid settings: geometry tolerance 0–1000 m, elevation interval 0.1–1000 m, smoothing window 0–10000 m.',
-  STATION_COUNT: 'A route needs 2–4096 station events.',
-  STATION_UNCONFIRMED: 'Confirm this station’s along-route visit before exporting.',
-  STATION_NAME_INVALID: 'A station name or short label exceeds its UTF-8 byte limit or contains invalid characters.',
-  STATION_INVALID: 'A station has invalid event fields or coordinates.',
-  EVENT_ID_DUPLICATE: 'Station event IDs must be unique.',
-  ENDPOINT_EVENTS: 'Exactly one start and finish must be the first and last events, at zero and the total distance, both defining stage boundaries.',
-  BOUNDARY_COLLISION: 'Stage boundaries coincide after decimeter quantization. Move one or disable its stage split.',
-  ELEVATION_UNCONFIRMED: 'Confirm that KML altitude values represent route ground elevation, or omit elevation.',
-};
-const issue = (code: string, messageZh: string, severity: ProcessingIssue['severity'] = 'error', s?: number): ProcessingIssue => {
-  const label = messageZh.match(/“([^”]+)”/)?.[1];
-  const count = /^(?:已合并 )?(\d+)/.exec(messageZh)?.[1];
-  return { code, message: `${issueText[code] ?? messageZh}${label ? ` (${label})` : ''}${count ? ` Count: ${count}.` : ''}`, messageZh, severity, ...(s === undefined ? {} : { s }) };
-};
+const issue = (code: string, params: Record<string, string | number> = {}, severity: ProcessingIssue['severity'] = 'error', s?: number): ProcessingIssue => ({
+  code, params, severity, ...(s === undefined ? {} : { s }),
+});
 
 export function quantize(value: number): number {
   if (!Number.isFinite(value)) throw new Error('Cannot quantize a non-finite value.');
@@ -100,12 +70,12 @@ export function buildReference(source: SourceRoute, options: { reverse?: boolean
     points.push({ ...point, s: (previous?.s ?? 0) + length });
   }
   const totalM = points[points.length - 1]?.s ?? 0;
-  if (points.length < 2 || totalM < 0.1) issues.push(issue('ROUTE_TOO_SHORT', '清理后路线不足两个有效点或不足 0.1 米。'));
-  if (duplicates) issues.push(issue('DUPLICATE_COORDINATES', `已合并 ${duplicates} 个连续重复坐标，保留经过顺序。`, 'warning'));
-  if (conflicts) issues.push(issue('ELEVATION_CONFLICT', `${conflicts} 处重复坐标的高程冲突，已标为缺失；可明确补全短缺口或省略高程。`, 'warning'));
+  if (points.length < 2 || totalM < 0.1) issues.push(issue('ROUTE_TOO_SHORT'));
+  if (duplicates) issues.push(issue('DUPLICATE_COORDINATES', { count: duplicates }, 'warning'));
+  if (conflicts) issues.push(issue('ELEVATION_CONFLICT', { count: conflicts }, 'warning'));
   const missing = points.filter((point) => point.elevation === null).length;
-  if (missing) issues.push(issue('ELEVATION_MISSING', `${missing} 个有效路线点缺少高程。`, 'warning'));
-  if (largeEdges) issues.push(issue('LARGE_SOURCE_EDGE', `${largeEdges} 段相邻源坐标相距超过 1 km，请核对地图中的连接。`, 'warning'));
+  if (missing) issues.push(issue('ELEVATION_MISSING', { count: missing }, 'warning'));
+  if (largeEdges) issues.push(issue('LARGE_SOURCE_EDGE', { count: largeEdges }, 'warning'));
   return { points, totalM, isClosed: closed, elevationDatum: source.elevationDatum, elevationUncertain: source.elevationUncertain, issues };
 }
 
@@ -257,7 +227,7 @@ function geometry(reference: ReferenceRoute, boundaryDm: number[], tolerance: nu
     const a = reference.points[index - 1];
     const b = reference.points[index];
     const pieces = Math.ceil((b.s - a.s) / MAX_GEOMETRY_EDGE_M);
-    if (nodes.length + pieces > 400_000) { issues.push(issue('GEOMETRY_RESOURCE_LIMIT', '路线太长或源点过于稀疏，无法在浏览器预算内细分几何。')); return []; }
+    if (nodes.length + pieces > 400_000) { issues.push(issue('GEOMETRY_RESOURCE_LIMIT')); return []; }
     for (let step = 1; step < pieces; step++) nodes.push({ ...interpolate(a, b, step / pieces), s: a.s + (b.s - a.s) * step / pieces, required: false });
   }
   for (const dm of boundaryDm) {
@@ -280,7 +250,7 @@ function geometry(reference: ReferenceRoute, boundaryDm: number[], tolerance: nu
     const node = { latE7: quantize(point.lat * 1e7), lonE7: lonE7(point.lon), sDm: quantize(point.s * 10), required: point.required };
     let previous = output[output.length - 1];
     while (previous && previous.latE7 === node.latE7 && previous.lonE7 === node.lonE7) {
-      if (previous.required && node.required) { issues.push(issue('GEOMETRY_QUANTIZATION_COLLISION', '两个阶段边界在 E7 量化后无法形成有效线段，请调整或取消其中的阶段边界。', 'error', point.s)); return []; }
+      if (previous.required && node.required) { issues.push(issue('GEOMETRY_QUANTIZATION_COLLISION', {}, 'error', point.s)); return []; }
       removed++;
       if (!node.required) break;
       output.pop();
@@ -289,8 +259,8 @@ function geometry(reference: ReferenceRoute, boundaryDm: number[], tolerance: nu
     if (previous && previous.latE7 === node.latE7 && previous.lonE7 === node.lonE7) continue;
     output.push(node);
   }
-  if (removed) issues.push(issue('GEOMETRY_QUANTIZATION_MERGE', `已消解 ${removed} 个量化后重合的几何节点。`, 'warning'));
-  if (output.length < 2) issues.push(issue('GEOMETRY_QUANTIZATION_COLLISION', 'E7 量化后没有足够的不同几何节点。'));
+  if (removed) issues.push(issue('GEOMETRY_QUANTIZATION_MERGE', { count: removed }, 'warning'));
+  if (output.length < 2) issues.push(issue('GEOMETRY_QUANTIZATION_COLLISION'));
   return output.map(({ latE7, lonE7: longitude, sDm }) => ({ latE7, lonE7: longitude, sDm }));
 }
 
@@ -304,7 +274,7 @@ function repairedProfile(reference: ReferenceRoute, mode: ProcessingOptions['ele
     const left = points[firstMissing - 1];
     const right = points[index];
     if (mode !== 'interpolate' || !left || !right || right.s - left.s > MAX_INTERPOLATION_GAP_M) {
-      issues.push(issue('INCOMPLETE_ELEVATION', mode === 'source' ? '源高程不完整，请明确选择补全短缺口或不导出高程。' : `无法补全端点或超过 ${MAX_INTERPOLATION_GAP_M} 米的缺口，请不导出高程或更换数据。`, 'error', points[firstMissing].s));
+      issues.push(issue('INCOMPLETE_ELEVATION', { limit: MAX_INTERPOLATION_GAP_M }, 'error', points[firstMissing].s));
       return null;
     }
     for (let gap = firstMissing; gap < index; gap++) points[gap].elevation = left.elevation! + (right.elevation! - left.elevation!) * (points[gap].s - left.s) / (right.s - left.s);
@@ -319,7 +289,7 @@ function elevation(reference: ReferenceRoute, boundaryDm: number[], options: Pro
   const totalDm = Number.isFinite(reference.totalM) ? quantize(reference.totalM * 10) : 0;
   const intervalDm = quantize(options.elevationIntervalM * 10);
   const sampleCount = Math.ceil(totalDm / intervalDm) + boundaryDm.length;
-  if (sampleCount > 200_000) { issues.push(issue('PROFILE_RESOURCE_LIMIT', '高程采样超过 200,000 个节点，请增大采样间隔。')); return null; }
+  if (sampleCount > 200_000) { issues.push(issue('PROFILE_RESOURCE_LIMIT')); return null; }
   const sampleDm = new Set(boundaryDm);
   for (let s = intervalDm; s < totalDm; s += intervalDm) sampleDm.add(s);
   sampleDm.add(0);
@@ -348,14 +318,14 @@ function elevation(reference: ReferenceRoute, boundaryDm: number[], options: Pro
     const left = Math.max(0, s - options.smoothingWindowM / 2);
     const right = Math.min(reference.totalM, s + options.smoothingWindowM / 2);
     const hDm = quantize((options.smoothingWindowM > 0 ? (area(right) - area(left)) / (right - left) : height(s)) * 10);
-    if (hDm < -2_147_483_648 || hDm > 2_147_483_647) { issues.push(issue('ELEVATION_RANGE', '高程超出 RTE 的 i32 分米范围。')); return null; }
+    if (hDm < -2_147_483_648 || hDm > 2_147_483_647) { issues.push(issue('ELEVATION_RANGE')); return null; }
     const previous = nodes[nodes.length - 1];
     const delta = previous ? hDm - previous.hDm : 0;
     const node = { sDm, hDm, upDm: (previous?.upDm ?? 0) + Math.max(0, delta), downDm: (previous?.downDm ?? 0) + Math.max(0, -delta) };
-    if (node.upDm > UINT32_MAX || node.downDm > UINT32_MAX) { issues.push(issue('ELEVATION_TOTAL_RANGE', '累计升降超出 RTE 的 u32 分米范围。')); return null; }
+    if (node.upDm > UINT32_MAX || node.downDm > UINT32_MAX) { issues.push(issue('ELEVATION_TOTAL_RANGE')); return null; }
     nodes.push(node);
   }
-  if (profile.filled) issues.push(issue('ELEVATION_FILLED', `已按里程线性补全不超过 ${MAX_INTERPOLATION_GAP_M} 米的内部高程缺口。`, 'warning'));
+  if (profile.filled) issues.push(issue('ELEVATION_FILLED', { limit: MAX_INTERPOLATION_GAP_M }, 'warning'));
   return { nodes, filled: profile.filled };
 }
 
@@ -365,26 +335,26 @@ function textIssue(value: string, maxBytes: number): boolean {
 
 export function processRoute(reference: ReferenceRoute, stations: DraftStation[], options: ProcessingOptions, identity: RouteIdentity): ProcessingResult {
   const issues: ProcessingIssue[] = [...reference.issues];
-  if (identity.routeId.length !== 16 || !identity.routeId.some(Boolean) || !Number.isInteger(identity.revision) || identity.revision < 1 || identity.revision > UINT32_MAX) issues.push(issue('IDENTITY_INVALID', '路线身份或修订号无效。'));
-  if (textIssue(identity.name, 96)) issues.push(issue('ROUTE_NAME_INVALID', '路线名称须为 1–96 个 UTF-8 字节，且不能包含控制字符。'));
-  if (identity.inputSha256 && identity.inputSha256.length !== 32) issues.push(issue('SOURCE_HASH_INVALID', '输入文件 SHA-256 必须是 32 字节。'));
-  if (!Number.isFinite(reference.totalM) || reference.totalM < 0.1 || reference.totalM * 10 > UINT32_MAX) issues.push(issue('DISTANCE_RANGE', '路线总距离超出 RTE 范围。'));
-  if (!Number.isFinite(options.geometryToleranceM) || options.geometryToleranceM < 0 || options.geometryToleranceM > 1000 || !Number.isFinite(options.elevationIntervalM) || options.elevationIntervalM < 0.1 || options.elevationIntervalM > 1000 || !Number.isFinite(options.smoothingWindowM) || options.smoothingWindowM < 0 || options.smoothingWindowM > 10_000 || !['omit', 'source', 'interpolate'].includes(options.elevationMode)) issues.push(issue('OPTIONS_INVALID', '处理参数无效：几何容差 0–1000 m、采样间隔 0.1–1000 m、平滑窗口 0–10000 m。'));
+  if (identity.routeId.length !== 16 || !identity.routeId.some(Boolean) || !Number.isInteger(identity.revision) || identity.revision < 1 || identity.revision > UINT32_MAX) issues.push(issue('IDENTITY_INVALID'));
+  if (textIssue(identity.name, 96)) issues.push(issue('ROUTE_NAME_INVALID'));
+  if (identity.inputSha256 && identity.inputSha256.length !== 32) issues.push(issue('SOURCE_HASH_INVALID'));
+  if (!Number.isFinite(reference.totalM) || reference.totalM < 0.1 || reference.totalM * 10 > UINT32_MAX) issues.push(issue('DISTANCE_RANGE'));
+  if (!Number.isFinite(options.geometryToleranceM) || options.geometryToleranceM < 0 || options.geometryToleranceM > 1000 || !Number.isFinite(options.elevationIntervalM) || options.elevationIntervalM < 0.1 || options.elevationIntervalM > 1000 || !Number.isFinite(options.smoothingWindowM) || options.smoothingWindowM < 0 || options.smoothingWindowM > 10_000 || !['omit', 'source', 'interpolate'].includes(options.elevationMode)) issues.push(issue('OPTIONS_INVALID'));
   const totalDm = Number.isFinite(reference.totalM) ? quantize(reference.totalM * 10) : 0;
-  if (stations.length < 2 || stations.length > 4096) issues.push(issue('STATION_COUNT', '站点事件须为 2–4096 个。'));
+  if (stations.length < 2 || stations.length > 4096) issues.push(issue('STATION_COUNT'));
   const events: StationEvent[] = stations.map((station) => {
-    if (!station.confirmed) issues.push(issue('STATION_UNCONFIRMED', `请确认“${station.name}”对应的经过位置。`, 'error', station.s));
-    if (textIssue(station.name, 96) || textIssue(station.shortLabel, 16)) issues.push(issue('STATION_NAME_INVALID', `“${station.name}”的名称或短标签超出 UTF-8 字节限制或含无效字符。`));
-    if (!Number.isInteger(station.id) || station.id < 1 || station.id > UINT32_MAX || !Number.isInteger(station.kind) || station.kind < 0 || station.kind > 4 || !Number.isFinite(station.s) || station.s < 0 || station.s > reference.totalM || !Number.isFinite(station.lat) || station.lat < -90 || station.lat > 90 || !Number.isFinite(station.lon)) issues.push(issue('STATION_INVALID', `“${station.name}”的事件字段或坐标无效。`));
+    if (!station.confirmed) issues.push(issue('STATION_UNCONFIRMED', { name: station.name }, 'error', station.s));
+    if (textIssue(station.name, 96) || textIssue(station.shortLabel, 16)) issues.push(issue('STATION_NAME_INVALID', { name: station.name }));
+    if (!Number.isInteger(station.id) || station.id < 1 || station.id > UINT32_MAX || !Number.isInteger(station.kind) || station.kind < 0 || station.kind > 4 || !Number.isFinite(station.s) || station.s < 0 || station.s > reference.totalM || !Number.isFinite(station.lat) || station.lat < -90 || station.lat > 90 || !Number.isFinite(station.lon)) issues.push(issue('STATION_INVALID', { name: station.name }));
     return { eventId: station.id, name: station.name, shortLabel: station.shortLabel, kind: station.kind, stageBoundary: station.stageBoundary, sDm: Number.isFinite(station.s) ? quantize(station.s * 10) : 0, actualLatE7: Number.isFinite(station.lat) ? quantize(station.lat * 1e7) : 0, actualLonE7: Number.isFinite(station.lon) ? lonE7(station.lon) : 0 };
   }).sort((a, b) => a.sDm - b.sDm || a.eventId - b.eventId);
-  if (new Set(events.map((event) => event.eventId)).size !== events.length) issues.push(issue('EVENT_ID_DUPLICATE', '站点事件 ID 必须唯一。'));
+  if (new Set(events.map((event) => event.eventId)).size !== events.length) issues.push(issue('EVENT_ID_DUPLICATE'));
   const starts = events.filter((event) => event.kind === 0);
   const finishes = events.filter((event) => event.kind === 1);
-  if (starts.length !== 1 || finishes.length !== 1 || events[0] !== starts[0] || events[events.length - 1] !== finishes[0] || starts[0]?.sDm !== 0 || finishes[0]?.sDm !== totalDm || !starts[0]?.stageBoundary || !finishes[0]?.stageBoundary) issues.push(issue('ENDPOINT_EVENTS', '路线必须恰有一个起点和终点，分别位于事件首末及里程 0 和全长，且均为阶段边界。'));
+  if (starts.length !== 1 || finishes.length !== 1 || events[0] !== starts[0] || events[events.length - 1] !== finishes[0] || starts[0]?.sDm !== 0 || finishes[0]?.sDm !== totalDm || !starts[0]?.stageBoundary || !finishes[0]?.stageBoundary) issues.push(issue('ENDPOINT_EVENTS'));
   const boundaries = events.filter((event) => event.stageBoundary);
-  for (let index = 1; index < boundaries.length; index++) if (boundaries[index].sDm <= boundaries[index - 1].sDm) issues.push(issue('BOUNDARY_COLLISION', '阶段边界在分米量化后重合，请调整里程或取消其中一个阶段边界。', 'error', boundaries[index].sDm / 10));
-  if (options.elevationMode !== 'omit' && reference.elevationUncertain && !options.acceptUncertainElevation) issues.push(issue('ELEVATION_UNCONFIRMED', '请确认 KML 高度可以作为路线地面高程，或不导出高程。'));
+  for (let index = 1; index < boundaries.length; index++) if (boundaries[index].sDm <= boundaries[index - 1].sDm) issues.push(issue('BOUNDARY_COLLISION', {}, 'error', boundaries[index].sDm / 10));
+  if (options.elevationMode !== 'omit' && reference.elevationUncertain && !options.acceptUncertainElevation) issues.push(issue('ELEVATION_UNCONFIRMED'));
   if (issues.some((entry) => entry.severity === 'error')) return { route: null, issues };
   const boundaryDm = boundaries.map((event) => event.sDm);
   const geom = geometry(reference, boundaryDm, options.geometryToleranceM, issues);

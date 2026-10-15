@@ -1,3 +1,4 @@
+import { useLocale } from '../../i18n/useLocale';
 import { ArrowRight } from 'lucide-react';
 import { queryElevation } from '../../core/rte';
 import type { DraftStation, RouteData } from '../../core/types';
@@ -9,14 +10,9 @@ export interface StageListProps {
   /** Stations in along-route order. */
   stations: readonly StageStation[];
   route: StageProfile | null;
-  language: 'en' | 'zh';
   onSelectDistance: (distanceM: number) => void;
 }
 
-const km = (meters: number) => (meters / 1000).toLocaleString('en-US', {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
 
 function stageClimb(route: StageProfile | null, fromId: number, toId: number) {
   if (!route?.elev) return null;
@@ -31,10 +27,11 @@ function stageClimb(route: StageProfile | null, fromId: number, toId: number) {
   };
 }
 
-export default function StageList({ stations, route, language, onSelectDistance }: StageListProps) {
+export default function StageList({ stations, route, onSelectDistance }: StageListProps) {
+  const { t, km, number } = useLocale();
   const boundaries = stations.filter(station => station.stageBoundary);
   return <>
-    <div className="section-label">{language === 'zh' ? '阶段' : 'STAGES'}</div>
+    <div className="section-label">{t('review.stages')}</div>
     {boundaries.slice(0, -1).map((from, index) => {
       const to = boundaries[index + 1];
       const climb = stageClimb(route, from.id, to.id);
@@ -43,7 +40,7 @@ export default function StageList({ stations, route, language, onSelectDistance 
           <strong>{from.shortLabel} <ArrowRight size={12} /> {to.shortLabel}</strong>
           <small>{from.name} → {to.name}</small>
           {climb && <small className="stage-climb">
-            ↗ {climb.up.toLocaleString()} m <span>↘ {climb.down.toLocaleString()} m</span>
+            ↗ {number(climb.up)} m <span>↘ {number(climb.down)} m</span>
           </small>}
         </span>
         <b>{km(to.s - from.s)}<small> km</small></b>

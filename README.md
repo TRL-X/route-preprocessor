@@ -91,6 +91,7 @@ src/
   app/          引导状态、Worker 通信、本地草稿和版本分配
   components/   地图与高程图
   features/     按流程组织的界面组件
+  i18n/         国际化配置和独立语言资源
   core/         模型、解析、预处理、CBOR/RTE 编解码与校验
   workers/      文件解析、路线处理和导出任务
 tests/
@@ -105,6 +106,7 @@ docs/           格式规范、架构与处理策略
 - [文件格式规范（中英双语）](docs/TRL-X_Route_V1_Specification_ZH_EN.md)：格式 1.0，文档修订 0.2，Draft。
 - [架构说明](docs/architecture.md)
 - [预处理规则与限额](docs/preprocessing.md)
+- [国际化维护说明](docs/i18n.md)：新增语言、插值、复数、回退和数字格式。
 
 格式规范变更须同步更新实现、符合性测试和参考向量，并记录兼容性影响；文档修订
 与文件格式版本分别管理。预处理参数和界面选择另行记录，不改变规范的字段解释。

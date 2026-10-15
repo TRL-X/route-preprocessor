@@ -1,3 +1,4 @@
+import { useLocale } from '../i18n/useLocale';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Map as MapLibreMap, GeoJSONSource, setWorkerUrl } from 'maplibre-gl';
 import type { StyleSpecification } from 'maplibre-gl';
@@ -16,7 +17,6 @@ interface Props {
   onCursorChange: (s: number) => void;
   onStationSelect: (id: number) => void;
   onRouteClick?: (s: number) => void;
-  language: 'en' | 'zh';
   basemap: boolean;
 }
 
@@ -139,7 +139,8 @@ function fitRoute(map: MapLibreMap, coordinates: Coordinate[]) {
 }
 
 export default function RouteMap(props: Props) {
-  const { reference, stations, selectedStationId, cursorS, language, basemap } = props;
+  const { reference, stations, selectedStationId, cursorS, basemap } = props;
+  const { t, number } = useLocale();
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const propsRef = useRef(props);
@@ -152,7 +153,6 @@ export default function RouteMap(props: Props) {
   const [ready, setReady] = useState(false);
   const remoteActive = useRef(false);
   const styleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const zh = language === 'zh';
 
   useEffect(() => {
     if (!host.current) return;
@@ -244,21 +244,22 @@ export default function RouteMap(props: Props) {
   }, [reference, coordinates, cursorS, ready]);
 
   return <div className={`route-map ${!basemap || unavailable || noWebGL ? 'route-map--plain' : ''}`}>
-    <div className="route-map__canvas" ref={host} role="region" aria-label={zh ? '交互式路线地图' : 'Interactive route map'} />
+    <div className="route-map__canvas" ref={host} role="region" aria-label={t('map.interactiveRouteMap')} />
     {noWebGL && <RouteSketch {...props} coordinates={coordinates} />}
     <div className="route-map__north" aria-hidden="true"><span>N</span><svg viewBox="0 0 20 24"><path d="M10 1 17 21 10 16 3 21Z" /></svg></div>
-    {!noWebGL && <div className="route-map__controls" aria-label={zh ? '地图控制' : 'Map controls'}>
-      <button type="button" onClick={() => mapRef.current?.zoomIn()} aria-label={zh ? '放大' : 'Zoom in'} title={zh ? '放大' : 'Zoom in'}>+</button>
-      <button type="button" onClick={() => mapRef.current?.zoomOut()} aria-label={zh ? '缩小' : 'Zoom out'} title={zh ? '缩小' : 'Zoom out'}>−</button>
-      <button type="button" onClick={() => mapRef.current && fitRoute(mapRef.current, coordinates)} disabled={!reference} aria-label={zh ? '显示完整路线' : 'Fit entire route'} title={zh ? '显示完整路线' : 'Fit entire route'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/><circle cx="12" cy="12" r="3" /></svg></button>
+    {!noWebGL && <div className="route-map__controls" aria-label={t('map.mapControls')}>
+      <button type="button" onClick={() => mapRef.current?.zoomIn()} aria-label={t('map.zoomIn')} title={t('map.zoomIn')}>+</button>
+      <button type="button" onClick={() => mapRef.current?.zoomOut()} aria-label={t('map.zoomOut')} title={t('map.zoomOut')}>−</button>
+      <button type="button" onClick={() => mapRef.current && fitRoute(mapRef.current, coordinates)} disabled={!reference} aria-label={t('map.fitEntireRoute')} title={t('map.fitEntireRoute')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/><circle cx="12" cy="12" r="3" /></svg></button>
     </div>}
-    {reference && <div className="route-map__legend"><span className="route-map__legend-line" />{(reference.totalM / 1000).toFixed(1)} km<span className="route-map__legend-divider" />{stations.length} {zh ? '站点' : 'stations'}</div>}
-    {(unavailable || noWebGL) && <div className="route-map__status" role="status">{zh ? '简洁地图 · 路线仍可编辑' : 'Simple map · route editing available'}</div>}
+    {reference && <div className="route-map__legend"><span className="route-map__legend-line" />{number(reference.totalM / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km<span className="route-map__legend-divider" />{t('common.stationCount', { count: stations.length })}</div>}
+    {(unavailable || noWebGL) && <div className="route-map__status" role="status">{t('map.simpleMapRouteEditingAvailable')}</div>}
   </div>;
 }
 
 /** An interactive route sketch also works when a browser cannot create WebGL. */
 function RouteSketch(props: Props & { coordinates: Coordinate[] }) {
+  const { t } = useLocale();
   const { reference, coordinates, stations, selectedStationId, cursorS, onStationSelect } = props;
   if (!reference || !coordinates.length) return null;
   const middleLat = coordinates.reduce((sum, p) => sum + p[1], 0) / coordinates.length;
@@ -272,7 +273,7 @@ function RouteSketch(props: Props & { coordinates: Coordinate[] }) {
   const screenPoints = coordinates.map(xy);
   const line = screenPoints.map((p) => p.join(',')).join(' ');
   const cursor = cursorS === null ? null : xy(positionAt(reference, coordinates, cursorS));
-  return <svg className="route-map__sketch" viewBox="0 0 800 500" aria-label={props.language === 'zh' ? '路线预览' : 'Route preview'}>
+  return <svg className="route-map__sketch" viewBox="0 0 800 500" aria-label={t('map.routePreview')}>
     <polyline points={line} fill="none" stroke="#fffdf5" strokeWidth="10" strokeLinejoin="round" />
     <polyline points={line} fill="none" stroke="#355b45" strokeWidth="4" strokeLinejoin="round" />
     <polyline points={line} fill="none" stroke="transparent" strokeWidth="28" className="route-map__sketch-hit" onClick={(event) => {

@@ -41,7 +41,7 @@ describe('route import', () => {
     const parsed = parseRouteFile('<g:gpx xmlns:g="urn:gpx"><g:trk><g:name>A</g:name><g:trkseg><g:trkpt lat="0" lon="0"/><g:trkpt lat="0" lon="1"/></g:trkseg><g:trkseg><g:trkpt lat="0" lon="5"/><g:trkpt lat="0" lon="6"/></g:trkseg></g:trk><g:rte><g:rtept lat="0" lon="8"/><g:rtept lat="0" lon="9"/></g:rte></g:gpx>', 'segments.gpx');
     expect(parsed.routes).toHaveLength(3);
     expect(parsed.routes.map((route) => route.points.length)).toEqual([2, 2, 2]);
-    expect(parsed.warnings.some((value) => value.includes('never automatically joined'))).toBe(true);
+    expect(parsed.warnings.some((value) => value.code === 'IMPORT_MULTIPLE_SEGMENTS')).toBe(true);
   });
 
   it('accepts standard XML entities and never treats labels as markup', () => {

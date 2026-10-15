@@ -9,10 +9,13 @@ export interface SourceRoute {
 export interface SourceLandmark { id: string; name: string; lat: number; lon: number }
 export interface ImportedFile {
   fileName: string; format: 'gpx' | 'kml'; routes: SourceRoute[];
-  landmarks: SourceLandmark[]; warnings: string[];
+  landmarks: SourceLandmark[]; warnings: DiagnosticMessage[];
 }
-export interface ProcessingIssue {
-  code: string; severity: 'warning' | 'error'; message: string; messageZh?: string; s?: number;
+export interface DiagnosticMessage {
+  code: string; params?: Record<string, string | number>; message?: string;
+}
+export interface ProcessingIssue extends DiagnosticMessage {
+  severity: 'warning' | 'error'; s?: number;
 }
 export interface ReferencePoint extends SourcePoint { s: number; sourceIndex?: number }
 export interface ReferenceRoute {
