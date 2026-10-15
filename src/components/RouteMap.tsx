@@ -131,16 +131,24 @@ function updateCursor(map: MapLibreMap, props: Props, coordinates: Coordinate[])
   } : emptyCollection);
 }
 
-function fitRoute(map: MapLibreMap, coordinates: Coordinate[]) {
+function fitRoute(map: MapLibreMap, coordinates: Coordinate[], duration = 450) {
   if (!coordinates.length) return;
+  const { clientWidth: width, clientHeight: height } = map.getContainer();
+  if (!width || !height) return;
   let west = Infinity; let east = -Infinity; let south = Infinity; let north = -Infinity;
   for (const [x, y] of coordinates) { west = Math.min(west, x); east = Math.max(east, x); south = Math.min(south, y); north = Math.max(north, y); }
-  map.fitBounds([[west, south], [east, north]], { padding: { top: 64, bottom: 64, left: 48, right: 64 }, maxZoom: 16, duration: 450 });
+  // Fixed 64px top/bottom padding leaves almost no route in a short phone pane.
+  const vertical = Math.min(64, height * .15);
+  const horizontal = Math.min(48, width * .12);
+  map.fitBounds([[west, south], [east, north]], {
+    padding: { top: vertical, bottom: vertical, left: horizontal, right: horizontal },
+    maxZoom: 16, duration,
+  });
 }
 
 export default function RouteMap(props: Props) {
   const { reference, stations, selectedStationId, cursorS, basemap } = props;
-  const { t, number } = useLocale();
+  const { t } = useLocale();
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const propsRef = useRef(props);
@@ -206,7 +214,13 @@ export default function RouteMap(props: Props) {
       if (!map.getLayer('route-hit')) return;
       map.getCanvas().style.cursor = map.queryRenderedFeatures(event.point, { layers: ['station-hit', 'route-hit'] }).length ? 'pointer' : '';
     });
-    const observer = new ResizeObserver(() => map.resize());
+    const observer = new ResizeObserver(() => {
+      // A hidden view has no dimensions. Fit again after a resize or reveal,
+      // without an animation that map.resize() could interrupt halfway through.
+      if (!host.current?.clientWidth || !host.current.clientHeight) return;
+      map.resize();
+      fitRoute(map, coordinatesRef.current, 0);
+    });
     observer.observe(host.current);
     return () => { clearTimeout(styleTimer.current); observer.disconnect(); map.remove(); mapRef.current = null; };
   }, []);
@@ -230,7 +244,7 @@ export default function RouteMap(props: Props) {
     const map = mapRef.current;
     if (!map) return;
     if (map.getSource('route')) updateRoute(map, reference, coordinates);
-    if (coordinates.length) fitRoute(map, coordinates);
+    if (coordinates.length) fitRoute(map, coordinates, 0);
   }, [reference, coordinates, ready]);
 
   useEffect(() => {
@@ -252,7 +266,6 @@ export default function RouteMap(props: Props) {
       <button type="button" onClick={() => mapRef.current?.zoomOut()} aria-label={t('map.zoomOut')} title={t('map.zoomOut')}>−</button>
       <button type="button" onClick={() => mapRef.current && fitRoute(mapRef.current, coordinates)} disabled={!reference} aria-label={t('map.fitEntireRoute')} title={t('map.fitEntireRoute')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/><circle cx="12" cy="12" r="3" /></svg></button>
     </div>}
-    {reference && <div className="route-map__legend"><span className="route-map__legend-line" />{number(reference.totalM / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km<span className="route-map__legend-divider" />{t('common.stationCount', { count: stations.length })}</div>}
     {(unavailable || noWebGL) && <div className="route-map__status" role="status">{t('map.simpleMapRouteEditingAvailable')}</div>}
   </div>;
 }

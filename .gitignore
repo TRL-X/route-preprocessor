@@ -9,3 +9,6 @@ test-results/
 playwright-report/
 *.tsbuildinfo
 .DS_Store
+
+# Local IDE configuration
+.idea/

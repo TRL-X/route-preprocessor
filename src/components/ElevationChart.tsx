@@ -14,7 +14,6 @@ interface Props {
   compareSource?: boolean;
 }
 interface ProfilePoint { s: number; h: number | null }
-const HEIGHT = 180;
 const LEFT = 50;
 const RIGHT = 16;
 const TOP = 16;
@@ -68,6 +67,7 @@ export default function ElevationChart({ reference, route, stations, cursorS, on
   const containerRef = useRef<HTMLElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [width, setWidth] = useState(700);
+  const [HEIGHT, setHeight] = useState(180);
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -92,6 +92,13 @@ export default function ElevationChart({ reference, route, stations, cursorS, on
     const padding = Math.max(5, (axisMax - axisMin) * 0.15);
     return { min, max, axisMin, axisMax, count, low: axisMin - padding, high: axisMax + padding, segments: displaySegments(points) };
   }, [points, sourceSegments]);
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const observer = new ResizeObserver(([entry]) => setHeight(Math.max(80, entry.contentRect.height)));
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, [profile.count > 0]);
   const total = route ? route.totalSDm / 10 : reference?.totalM ?? 0;
   const currentS = Math.max(0, Math.min(total, cursorS ?? 0));
   const currentH = heightAt(points, currentS);
@@ -100,8 +107,6 @@ export default function ElevationChart({ reference, route, stations, cursorS, on
   const base = HEIGHT - BOTTOM;
   const distanceLabel = `${km(currentS)} km`;
   const heightLabel = currentH === null ? (t('profile.noElevation')) : `${number(Math.round(currentH))} m`;
-  const label = t('profile.routeProgress');
-  const valueText = `${distanceLabel}, ${heightLabel}`;
   const changeFromPointer = (event: PointerEvent<SVGSVGElement>) => {
     const matrix = svgRef.current?.getScreenCTM();
     if (!matrix) return;
@@ -111,7 +116,7 @@ export default function ElevationChart({ reference, route, stations, cursorS, on
 
   return <section ref={containerRef} className="elevation-chart" aria-label={t('profile.elevationProfile')}>
     <div className="elevation-chart__heading">
-      <div className="elevation-chart__title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m3 18 6-10 4 6 3-4 5 8H3Z" /></svg><h3>{t('profile.elevationProfile')}</h3>{profile.count > 0 && <span className="elevation-chart__badge">{processed ? (t('profile.exportData')) : (t('profile.sourceElevation'))}</span>}</div>
+      <div className="elevation-chart__title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m3 18 6-10 4 6 3-4 5 8H3Z" /></svg><h3>{t('profile.elevationProfile')}</h3></div>
       {reference && <div className="elevation-chart__readout"><strong>{distanceLabel}</strong><span>{heightLabel}</span></div>}
     </div>
     {profile.count > 0 ? <>
@@ -140,9 +145,6 @@ export default function ElevationChart({ reference, route, stations, cursorS, on
         {currentH !== null && <circle cx={x(currentS)} cy={y(currentH)} r="4.5" fill="#d3ed99" stroke="#355b45" strokeWidth="2" vectorEffect="non-scaling-stroke"/>}
         {(width < 400 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1]).map((fraction) => <text key={fraction} x={x(total * fraction)} y={HEIGHT - 7} textAnchor={fraction === 0 ? 'start' : fraction === 1 ? 'end' : 'middle'} className="elevation-chart__axis">{number(total * fraction / 1000, { minimumFractionDigits: total < 10000 ? 1 : 0, maximumFractionDigits: total < 10000 ? 1 : 0 })} km</text>)}
       </svg>
-      {sourceSegments.length > 0 && <div className="elevation-chart__comparison-legend"><span><i/>{t('profile.exportElevation')}</span><span><i/>{t('profile.sourceElevation')}</span></div>}
-      <div className="elevation-chart__footer"><span>{t('profile.elevationRange', { min: number(Math.round(profile.min)), max: number(Math.round(profile.max)) })}</span><span>{t('profile.slideAlongTheProfileToExplore')}</span></div>
     </> : <div className="elevation-chart__empty"><span className="elevation-chart__empty-line"/>{reference ? (t('profile.noElevationAvailableYouCanStillExploreRoute')) : (t('profile.importARouteToDiscoverItsUpsAnd'))}</div>}
-    {reference && <div className="elevation-chart__slider-row"><label htmlFor={`${uid}-progress`}>{label}</label><input id={`${uid}-progress`} type="range" min="0" max={Math.max(1, total)} step="1" value={currentS} onChange={(event) => onCursorChange(Number(event.target.value))} aria-valuetext={valueText}/></div>}
   </section>;
 }

@@ -1,0 +1,200 @@
+/* The shell owns viewport sizing. Only the landing page and pane bodies scroll. */
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+.studio {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.topbar {
+  height: 60px;
+  flex-shrink: 0;
+}
+
+.main-shell {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.studio--editing .main-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: none;
+  padding: 12px 24px max(16px, env(safe-area-inset-bottom));
+  overflow: hidden;
+}
+
+.studio--editing .document-actions {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.studio--editing .stepper {
+  flex-shrink: 0;
+  min-height: 54px;
+  margin: 0;
+}
+
+.studio--editing :is(.alert, .busy-banner) {
+  flex-shrink: 0;
+  max-height: 20%;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.studio--editing .editor-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: clamp(280px, 27vw, 360px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.studio--editing :is(.editor-panel, .visual-workspace) {
+  min-height: 0;
+  height: 100%;
+  max-height: none;
+}
+
+.studio--editing .panel-heading { padding: 14px 20px; }
+.studio--editing .panel-heading .panel-kicker { display: none; }
+.studio--editing .panel-heading h2 { font-size: 20px; margin: 0 0 4px; }
+.studio--editing .panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.studio--editing .panel-footer { position: static; padding: 12px 16px; }
+/* Station rows flow into the panel body, avoiding a second nested scrollbar. */
+.studio--editing .station-row { flex-shrink: 0; }
+
+.studio--editing .visual-workspace { display: flex; flex-direction: column; }
+.studio--editing .workspace-toolbar { flex-shrink: 0; }
+.studio--editing :is(.map-panel, .profile-panel) {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.studio--editing .profile-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.studio--editing .elevation-chart { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0; padding: 8px 12px; }
+.studio--editing .elevation-chart__empty { flex: 1; min-height: 0; }
+.studio--editing .elevation-chart__svg { flex: 1 1 0; min-height: 0; height: auto; }
+.studio--editing .elevation-chart__heading { flex-shrink: 0; }
+.route-progress { display: flex; align-items: center; gap: 12px; padding: 6px 16px; min-height: 44px; flex-shrink: 0; border-top: 1px solid var(--line); font-size: 10px; color: #78836e; }
+.route-progress input { flex: 1; min-width: 0; accent-color: #667e43; margin: 0; height: 30px; }
+.route-progress output { min-width: 62px; text-align: right; font-variant-numeric: tabular-nums; }
+.workspace-toolbar .preview-toggle { margin-left: auto; }
+.studio--editing .stats-strip { flex-shrink: 0; padding-block: 14px; border-bottom: 0; }
+.studio--editing .visual-workspace > [hidden] { display: none; }
+.preview-toggle { display: none; }
+
+@media (max-width: 760px) {
+  .topbar { height: 54px; padding-inline: 16px; }
+  .studio--editing .main-shell {
+    gap: 8px;
+    padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+  }
+  .studio--editing .document-actions { gap: 6px; }
+  .studio--editing .save-status { max-width: 80px; }
+  .studio--editing .stepper { min-height: 54px; padding-inline: 6px; }
+  .studio--editing .step { padding-block: 4px; }
+  .studio--editing .editor-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 55%) minmax(0, 1fr);
+    gap: 8px;
+  }
+  .studio--editing .editor-layout--preview-collapsed { grid-template-rows: 50px minmax(0, 1fr); }
+  .studio--editing .editor-layout--preview-collapsed .visual-workspace > :not(.workspace-toolbar) { display: none; }
+  .studio--editing .panel-heading { padding: 10px 16px; }
+  .studio--editing .panel-heading h2 { font-size: 17px; }
+  .studio--editing .panel-body { padding: 16px; }
+  .studio--editing .panel-footer { padding: 10px 12px; }
+  .studio--editing .workspace-toolbar { gap: 6px; padding: 3px 6px; height: 48px; }
+  .studio--editing .view-switch { padding: 0; }
+  .studio--editing .view-switch button { min-height: 40px; }
+  .studio--editing .preview-toggle { display: grid; flex-shrink: 0; }
+  .studio--editing .stats-strip { padding: 8px 12px; }
+  .studio--editing .stats-strip span { margin-bottom: 2px; }
+  .studio--editing .stats-strip strong { font-size: 17px; }
+}
+
+@media (max-height: 500px) {
+  .studio--editing .topbar { height: 44px; }
+  .studio--editing .main-shell { gap: 6px; padding-block: 6px; }
+  .studio--editing .stepper { min-height: 44px; }
+  .studio--editing .panel-heading { padding-block: 8px; }
+  .studio--editing .panel-heading .muted { display: none; }
+  .studio--editing .panel-footer { padding-block: 6px; }
+  .studio--editing .workspace-toolbar { height: 44px; }
+  .studio--editing .elevation-chart { padding-block: 4px; }
+  .studio--editing .stats-strip { padding-block: 6px; }
+}
+
+/* Keep all three touch controls accessible when mobile browser chrome is open. */
+@media (max-width: 760px) and (max-height: 740px) {
+  .studio--editing .route-map__controls { flex-direction: row; top: 8px; right: 8px; }
+  .studio--editing .route-map__controls button + button { border-top: 0; border-left: 1px solid var(--line); }
+  .studio--editing .route-map__status { bottom: 8px; }
+}
+
+.dialog-content { max-height: calc(100dvh - 32px); overflow: auto; }
+
+/* Keep file import focused on the file picker and its requirements. */
+.studio:not(.studio--editing) .main-shell {
+  padding-block: 20px max(24px, env(safe-area-inset-bottom));
+}
+.import-layout {
+  display: block;
+  max-width: 640px;
+  margin: 0 auto;
+}
+.import-panel h1 {
+  font-size: 26px;
+  letter-spacing: -.5px;
+}
+.import-panel > .muted {
+  max-width: none;
+  margin-top: 10px;
+}
+
+/* Reserve a complete compact profile and progress control; give the map the remaining height. */
+.studio--editing .visual-workspace--stacked .map-panel { flex: 1; min-height: 240px; }
+.studio--editing .visual-workspace--stacked .profile-panel {
+  flex: 0 0 220px;
+  border-top: 1px solid var(--line);
+  padding: 0;
+}
+.top-actions .document-actions { flex-direction: row; gap: 10px; }
+@media (max-width: 760px) {
+  .studio--editing .top-actions { gap: 8px; }
+  .studio--editing .top-actions .document-actions { gap: 4px; }
+  .studio--editing .save-status-text { display: none; }
+  .studio--editing .top-actions .icon-button { width: 32px; height: 32px; }
+}
+
+
+.issues-heading { display: flex; align-items: center; gap: 7px; min-height: 24px; margin: 0; font-size: 11px; font-weight: 550; color: #718260; }

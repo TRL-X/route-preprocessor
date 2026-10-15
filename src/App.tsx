@@ -4,15 +4,16 @@ import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react'
 import type { ChangeEvent } from 'react';
 import { useMachine } from '@xstate/react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { ArrowDownToLine, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, Circle, FileUp, Flag, Globe2, Layers, LoaderCircle, MapPinned, Mountain, Plus, RotateCcw, Route, ShieldCheck, SlidersHorizontal, Trash2, TriangleAlert, Undo2, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, Circle, FileUp, Flag, Globe2, LoaderCircle, MapPinned, Maximize2, Minimize2, Mountain, Plus, RotateCcw, Route, ShieldCheck, SlidersHorizontal, Trash2, TriangleAlert, Undo2, X } from 'lucide-react';
 import { flowMachine, STEPS, type Step } from './app/flow';
 import { workerTask } from './app/worker-client';
 import { loadDraft, saveDraft, reserveExportRevision, RevisionExhaustedError } from './app/drafts';
 import { positionAt } from './core/process';
-import type { DraftStation, ImportedFile, ProcessingOptions, ProcessingResult, ReferenceRoute, RouteData } from './core/types';
+import type { DraftStation, ImportedFile, ProcessingIssue, ProcessingOptions, ProcessingResult, ReferenceRoute, RouteData } from './core/types';
 import ElevationChart from './components/ElevationChart';
 import ImportLanding from './features/import/ImportLanding';
 import IssuesList from './features/review/IssuesList';
+import { issueStage, issuesForStep } from './features/review/issue-visibility';
 import StageList from './features/review/StageList';
 
 const RouteMap = lazy(() => import('./components/RouteMap'));
@@ -55,9 +56,13 @@ export default function App() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
   const [cursorS, setCursorS] = useState<number | null>(null);
-  const [basemap, setBasemap] = useState(true);
+  const [unlockedStep, setUnlockedStep] = useState(1);
   const [compareSource, setCompareSource] = useState(true);
-  const [mobileView, setMobileView] = useState<'map' | 'profile'>('map');
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [stackedPreview, setStackedPreview] = useState(false);
+  const [activeView, setActiveView] = useState<'map' | 'profile'>('map');
+  const [previewCollapsed, setPreviewCollapsed] = useState(false);
+  const showView = (view: 'map' | 'profile') => { setActiveView(view); setPreviewCollapsed(false); };
   const [confirmedRoute, setConfirmedRoute] = useState(false);
   const [dialog, setDialog] = useState<{ title: string; body: string; run: () => void } | null>(null);
   const [exported, setExported] = useState<{ filename: string; bytes: number; revision: number; routeId: string } | null>(null);
@@ -69,9 +74,30 @@ export default function App() {
   const selected = editor?.stations.find(s => s.id === selectedStationId);
   const unresolved = editor?.stations.filter(s => !s.confirmed).length ?? 0;
   const issues = result?.issues ?? editor?.reference.issues ?? [];
+  const importIssues: ProcessingIssue[] = (editor?.file.warnings ?? []).map(warning => typeof warning === 'string' ? { code: 'import', severity: 'warning', message: warning } : { ...warning, severity: 'warning' });
   const totalM = editor?.reference.totalM ?? 0;
   const currentRevision = editor ? ledger[hex(editor.routeId)]?.revision ?? 1 : 1;
-  const go = (next: Step) => { if (next === 'import' || editor) { send({ type: next.toUpperCase() }); setError(''); } };
+  const currentResult = !processing && processedEditor.current === editor;
+  const visibleIssues = editor ? issuesForStep([...issues, ...importIssues], step, editor.options) : [];
+  const errors = issues.filter(issue => issue.severity === 'error');
+  const routeComplete = !!editor && currentResult && confirmedRoute && !errors.some(issue => !['stations', 'elevation'].includes(issueStage(issue, editor?.options)));
+  const stationsComplete = routeComplete && unresolved === 0 && !errors.some(issue => issueStage(issue, editor?.options) === 'stations');
+  const elevationComplete = stationsComplete && !!route && currentResult;
+  const complete = [!!editor, routeComplete, stationsComplete, elevationComplete, elevationComplete, ready];
+  const canGo = (next: Step) => {
+    if (busy) return false;
+    const target = STEPS.indexOf(next);
+    if (target === 0) return true;
+    if (!editor) return false;
+    if (target <= stepIndex) return true;
+    if (target > unlockedStep && target !== stepIndex + 1) return false;
+    return complete.slice(0, target).every(Boolean);
+  };
+  const go = (next: Step) => {
+    if (!canGo(next)) return;
+    setUnlockedStep(previous => Math.max(previous, STEPS.indexOf(next)));
+    send({ type: next.toUpperCase() }); setError('');
+  };
 
   useEffect(() => {
     loadDraft<Draft>().then(value => { if ((value?.version === 1 || value?.version === 2) && value.editor?.file && value.editor.routeId instanceof Uint8Array) setDraft(value); }).catch(() => setSaved('failed'));
@@ -105,11 +131,31 @@ export default function App() {
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 5000); return () => clearTimeout(timer); }, [notice]);
   useEffect(() => () => cancelTask.current?.(), []);
 
+  // Measure the preview pane itself: phone controls, alerts, and browser chrome
+  // all affect the space available for a usable map plus a complete profile.
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setStackedPreview(entry.contentRect.height >= 600);
+    });
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, [!!editor, step]);
+
   const edit = useCallback((update: (previous: Editor) => Editor) => {
     const previous = editorRef.current;
     if (!previous || fileBusy.current) return;
     setHistory(history => [...history.slice(-24), previous]);
-    setEditor(update(previous)); setError('');
+    const next = update(previous);
+    if (next.name !== previous.name || next.reference !== previous.reference || next.options.geometryToleranceM !== previous.options.geometryToleranceM) {
+      setConfirmedRoute(false); setUnlockedStep(1);
+    } else if (next.stations !== previous.stations) {
+      setUnlockedStep(value => Math.min(value, 2));
+    } else if (next.options !== previous.options) {
+      setUnlockedStep(value => Math.min(value, 3));
+    }
+    setEditor(next); setError('');
   }, []);
   const editStation = (patch: Partial<DraftStation>) => edit(e => ({ ...e, stations: e.stations.map(s => s.id === selectedStationId ? { ...s, ...patch } : s) }));
   const editOptions = (patch: Partial<ProcessingOptions>) => edit(e => ({ ...e, options: { ...e.options, ...patch } }));
@@ -133,7 +179,7 @@ export default function App() {
       const data = await job.promise;
       const complete = data.reference.points.every(p => p.elevation !== null) && !data.reference.elevationUncertain;
       setEditor({ ...data, options: { ...DEFAULT_OPTIONS, elevationMode: complete ? 'source' : 'omit' }, name: data.file.routes[0].name || file.name.replace(/\.(gpx|kml)$/i, ''), routeId: crypto.getRandomValues(new Uint8Array(16)), inputSha256: hash, sourceIndex: 0, reverse: false, startIndex: 0 });
-      setHistory([]); setDraft(null); setCursorS(0); setSelectedStationId(null); setConfirmedRoute(false); setExported(null);
+      setHistory([]); setDraft(null); setCursorS(0); setSelectedStationId(null); setConfirmedRoute(false); setUnlockedStep(1); setExported(null);
       send({ type: 'ROUTE' });
     } catch (e) { if (!aborted(e)) setError(errorText(e)); }
     finally { setBusy(''); cancelTask.current = null; fileBusy.current = false; }
@@ -150,7 +196,7 @@ export default function App() {
       const data = await job.promise;
       setHistory(past => [...past.slice(-24), snapshot]);
       setEditor({ ...snapshot, ...data, sourceIndex, reverse, startIndex });
-      setConfirmedRoute(false); setSelectedStationId(null); setCursorS(0);
+      setConfirmedRoute(false); setUnlockedStep(1); setSelectedStationId(null); setCursorS(0);
     } catch (e) { if (!aborted(e)) setError(errorText(e)); }
     finally { setBusy(''); cancelTask.current = null; fileBusy.current = false; }
   }
@@ -166,7 +212,7 @@ export default function App() {
   }
   function restoreDraft() {
     if (!draft) return;
-    setEditor(draft.editor); setLedger(draft.ledger ?? {}); setHistory([]); setDraft(null); setConfirmedRoute(false); setCursorS(0); send({ type: 'ROUTE' });
+    setEditor(draft.editor); setLedger(draft.ledger ?? {}); setHistory([]); setDraft(null); setConfirmedRoute(false); setUnlockedStep(1); setCursorS(0); send({ type: 'ROUTE' });
   }
   async function exportRoute() {
     if (!editor || !route || !ready || fileBusy.current) return;
@@ -213,7 +259,7 @@ export default function App() {
   }
   function exportReport() {
     if (!editor) return;
-    const report = { name: editor.name, source: editor.file.fileName, routeId: exported?.routeId ?? hex(editor.routeId), revision: exported?.revision ?? currentRevision, parameters: editor.options, totalDistanceM: totalM, reportLanguage: language, issues: issues.map(issue => ({ ...issue, message: message(issue) })), stationCount: editor.stations.length, inputSha256: hex(editor.inputSha256) };
+    const report = { name: editor.name, source: editor.file.fileName, routeId: exported?.routeId ?? hex(editor.routeId), revision: exported?.revision ?? currentRevision, parameters: editor.options, totalDistanceM: totalM, reportLanguage: language, issues: [...issues, ...importIssues].map(issue => ({ ...issue, message: message(issue) })), stationCount: editor.stations.length, inputSha256: hex(editor.inputSha256) };
     download(new TextEncoder().encode(JSON.stringify(report, null, 2)), 'route-quality-report.json', 'application/json');
   }
   const handleFile = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void importFile(file); event.target.value = ''; };
@@ -221,24 +267,27 @@ export default function App() {
   const estimateBytes = route ? 64 + (route.elev ? 96 : 72) + route.geom.length * 12 + (route.elev?.length ?? 0) * 16 + Math.ceil((route.geom.length - 1) / 128) * 32 + route.stations.length * 80 + 256 : 0;
   const selectStation = (id: number) => { setSelectedStationId(id); const station = editor?.stations.find(s => s.id === id); if (station) setCursorS(station.s); go('stations'); };
 
-  return <div className="studio">
+  return <div className={'studio' + (editor && step !== 'import' ? ' studio--editing' : '')}>
     <header className="topbar">
       <a className="brand" href="/" onClick={e => { e.preventDefault(); go('import'); }} aria-label="TRL-X Route Studio">
         <span className="brand-mark"><Mountain size={23} strokeWidth={1.8} /></span><span>TRL-X <span className="brand-light">/ ROUTE STUDIO</span></span>
       </a>
       <div className="top-actions">
-        <span className="local-badge"><span className="status-dot" />{t('app.localFirstWorkspace')}</span>
+        {editor && step !== 'import' && <div className="document-actions">
+          <span className="save-status" role="status" aria-label={saved === 'saved' ? t('app.savedOnThisDevice') : saved === 'failed' ? t('app.localSaveUnavailable') : t('app.saving')} title={saved === 'saved' ? t('app.savedOnThisDevice') : saved === 'failed' ? t('app.localSaveUnavailable') : t('app.saving')}>
+            {saved === 'saved' ? <Check size={14} /> : saved === 'saving' ? <LoaderCircle size={14} className="spin" /> : <Circle size={12} />}
+            <span className="save-status-text">{saved === 'saved' ? t('app.savedOnThisDevice') : saved === 'failed' ? t('app.localSaveUnavailable') : t('app.saving')}</span>
+          </span>
+          <button className="icon-button" aria-label={t('app.undo')} title={t('app.undo')} disabled={!history.length || !!busy} onClick={() => { const previous = history.at(-1); if (previous) { setEditor(previous); setHistory(history.slice(0,-1)); setConfirmedRoute(false); setUnlockedStep(1); } }}><Undo2 size={16} /></button>
+        </div>}
+
         <label className="language-button"><Globe2 size={16} /><select aria-label={t('app.language')} value={language} onChange={event => void changeLanguage(event.target.value)}>{availableLanguages.map(locale => <option key={locale.code} value={locale.code} lang={locale.code}>{locale.label}</option>)}</select></label>
         <span className="version-badge">V1.0</span>
       </div>
     </header>
     <main className="main-shell">
-      <section className="title-row">
-        <div><p className="eyebrow"><span className="tiny-line" />{t('app.fromFileToFinishLine')}</p><h1>{editor && step !== 'import' ? editor.name : t('app.aBetterRouteStartsHere')}</h1><p className="page-description">{editor && step !== 'import' ? t('app.refineTheDetailsKeepTheAdventure') : t('app.turnYourGpxOrKmlIntoATrail')}</p></div>
-        {editor && <div className="document-actions"><span className="save-status">{saved === 'saved' ? <Check size={14} /> : saved === 'saving' ? <LoaderCircle size={14} className="spin" /> : <Circle size={12} />}{saved === 'saved' ? t('app.savedOnThisDevice') : saved === 'failed' ? t('app.localSaveUnavailable') : t('app.saving')}</span><button className="button button-ghost" disabled={!history.length || !!busy} onClick={() => { const previous = history.at(-1); if (previous) { setEditor(previous); setHistory(history.slice(0,-1)); setConfirmedRoute(false); } }}><Undo2 size={16} />{t('app.undo')}</button></div>}
-      </section>
       <nav className="stepper" aria-label={t('app.routePreparationSteps')}>
-        {STEPS.map((item, index) => <button key={item} className={'step ' + (step === item ? 'active' : '') + (index < stepIndex ? ' visited' : '')} disabled={(!editor && index > 0) || !!busy} onClick={() => go(item)} aria-current={step === item ? 'step' : undefined}><span className="step-number">{index < stepIndex ? <Check size={14} /> : String(index + 1).padStart(2, '0')}</span><span>{t(`steps.${item}.label`)}</span>{index < 5 && <span className="step-connector" />}</button>)}
+        {STEPS.map((item, index) => <button key={item} className={'step ' + (step === item ? 'active' : '') + (index < stepIndex ? ' visited' : '')} disabled={!canGo(item)} title={!canGo(item) && !busy ? t('app.completePreviousStep') : undefined} onClick={() => go(item)} aria-current={step === item ? 'step' : undefined}><span className="step-number">{index < stepIndex ? <Check size={14} /> : String(index + 1).padStart(2, '0')}</span><span>{t(`steps.${item}.label`)}</span>{index < 5 && <span className="step-connector" />}</button>)}
       </nav>
       {error && <div className="alert error" role="alert"><TriangleAlert size={18} /><span>{uiText(error)}</span><button aria-label={t('app.dismissError')} onClick={() => setError('')}><X size={16} /></button></div>}
       {busy && <div className="busy-banner" role="status"><LoaderCircle size={18} className="spin" /><span>{uiText(busy)}</span><button className="text-button" onClick={() => cancelTask.current?.()}>{t('app.cancel')}</button></div>}
@@ -250,10 +299,11 @@ export default function App() {
         onChooseFile={() => fileInput.current?.click()}
         onFileDrop={file => { void importFile(file); }}
         onRestoreDraft={restoreDraft}
-      /> : editor && <section className="editor-layout">
+      /> : editor && <section className={'editor-layout' + (previewCollapsed ? ' editor-layout--preview-collapsed' : '')}>
         <aside className="editor-panel">
-          <div className="panel-heading"><span className="panel-kicker">{String(stepIndex + 1).padStart(2,'0')} / {t('app.prepareYourRoute')}</span><h2>{t(`steps.${step}.label`)}</h2><p className="muted">{t(`steps.${step}.description`)}</p></div>
-          <fieldset className="panel-body" disabled={!!busy}>
+          <div className="panel-heading"><h2 id="editor-step-title">{t(`steps.${step}.label`)}</h2><p className="muted">{t(`steps.${step}.description`)}</p></div>
+          <div className="panel-body" role="region" aria-labelledby="editor-step-title" tabIndex={0}>
+            <fieldset className="panel-fields" disabled={!!busy}>
             {step === 'route' && <>
               <label className="field"><span>{t('app.routeName')}</span><input value={editor.name} onChange={e => edit(p => ({...p,name:e.target.value}))} /></label>
               <div className="source-file"><FileUp size={17} /><span>{editor.file.fileName}<small>{t('app.sourcePointCount', { count: editor.file.routes[editor.sourceIndex].points.length })}</small></span></div>
@@ -261,8 +311,6 @@ export default function App() {
               <div className="section-label">{t('app.travelDirection')}</div><div className="direction-card"><Flag size={18} /><span>{editor.reverse ? t('app.reversedFromSource') : t('app.asRecordedInSource')}<small>{km(totalM)} km · {editor.reference.isClosed ? t('app.closedLoop') : t('app.openRoute')}</small></span><button className="icon-button" aria-label={t('app.reverseRoute')} onClick={() => confirmRebuild(editor.sourceIndex,!editor.reverse,editor.startIndex)}><RotateCcw size={19} /></button></div>
               {editor.reference.isClosed && <button className="button button-secondary full-width" disabled={cursorS === null} onClick={() => { const point=editor.reference.points.reduce((a,b)=>Math.abs(a.s-(cursorS??0))<Math.abs(b.s-(cursorS??0))?a:b); confirmRebuild(editor.sourceIndex,editor.reverse,point.sourceIndex??0); }}><Flag size={16} />{t('app.setCursorPositionAsStart')}</button>}
               <details className="advanced"><summary><SlidersHorizontal size={15}/>{t('app.geometrySettings')}<ChevronDown size={14}/></summary><label className="field"><span>{t('app.simplificationToleranceM')}</span><input type="number" min="0" max="50" step="0.5" value={editor.options.geometryToleranceM} onChange={e=>editOptions({geometryToleranceM:Number(e.target.value)})}/><small>{t('app.referenceDistancesStayUnchanged')}</small></label></details>
-              <label className="check-field"><input type="checkbox" checked={confirmedRoute} onChange={e=>setConfirmedRoute(e.target.checked)}/><span>{t('app.iHaveCheckedTheRouteAndDirectionOn')}</span></label>
-              {editor.file.warnings.map((warning,i)=><div className="inline-note" key={i}><TriangleAlert size={15}/>{typeof warning === 'string' ? warning : message(warning)}</div>)}
             </>}
             {step === 'stations' && <>
               <div className="section-toolbar"><span>{t('app.alongRouteCount', { count: sortedStations.length })}</span><button className="button button-small" onClick={addStation}><Plus size={15}/>{t('app.add')}</button></div>
@@ -281,7 +329,7 @@ export default function App() {
               </div>}
             </>}
             {step === 'elevation' && <>
-              <div className="inline-note"><Mountain size={18}/><span>{t('app.missingElevationCount', { count: editor.reference.points.filter(p=>p.elevation===null).length })}</span></div>
+              {editor.reference.points.some(p=>p.elevation===null) && <div className="inline-note"><Mountain size={18}/><span>{t('app.missingElevationCount', { count: editor.reference.points.filter(p=>p.elevation===null).length })}</span></div>}
               <fieldset className="radio-cards"><legend>{t('app.elevationInTheExportedRoute')}</legend>{(['omit','source','interpolate'] as const).map((mode,i)=><label className={'radio-card '+(editor.options.elevationMode===mode?'selected':'')} key={mode}><input type="radio" name="elevation" value={mode} checked={editor.options.elevationMode===mode} onChange={()=>editOptions({elevationMode:mode})}/><span><strong>{[t('app.routeGeometryOnly'),t('app.useSourceElevation'),t('app.fillShortInteriorGaps')][i]}</strong><small>{[t('app.exportWithoutElevationOrClimbStatistics'),t('app.requiresACompleteUsableProfile'),t('app.interpolateGapsUpTo100MNoEndpoint')][i]}</small></span></label>)}</fieldset>
               {editor.reference.elevationUncertain&&editor.options.elevationMode!=='omit'&&<label className="check-field caution"><input type="checkbox" checked={editor.options.acceptUncertainElevation} onChange={e=>editOptions({acceptUncertainElevation:e.target.checked})}/><span>{t('app.iAcceptTheSourceSUncertainElevationReference')}</span></label>}
               {editor.options.elevationMode!=='omit'&&<><label className="field"><span>{t('app.samplingIntervalM')}</span><select value={editor.options.elevationIntervalM} onChange={e=>editOptions({elevationIntervalM:Number(e.target.value)})}>{[5,10,20,50].map(n=><option key={n} value={n}>{n} m</option>)}</select></label><label className="field"><span>{t('app.smoothingWindowM')}</span><select value={editor.options.smoothingWindowM} onChange={e=>editOptions({smoothingWindowM:Number(e.target.value)})}><option value={0}>{t('app.offPreserveSourceShape')}</option>{[10,30,50].map(n=><option key={n} value={n}>{n} m</option>)}</select><small>{t('app.smoothingChangesCalculatedAscentAndDescentCompareThe')}</small></label></>}
@@ -290,30 +338,39 @@ export default function App() {
             {step === 'preview' && <>
               <div className="review-summary"><span className="summary-icon"><Route size={24}/></span><h3>{editor.name}</h3><p>{km(totalM)} km · {t('common.stationCount', { count: editor.stations.length })}</p></div>
               <p className="small muted">{t('app.moveTheDistanceCursorToInspectTheSame')}</p>
-              <label className="field"><span>{t('app.distanceCursor')}<strong>{km(cursorS??0)} km</strong></span><input type="range" min="0" max={totalM} step="1" value={cursorS??0} onChange={e=>setCursorS(Number(e.target.value))}/></label>
               <StageList stations={sortedStations} route={route} onSelectDistance={setCursorS} />
               <button className="button button-secondary full-width" onClick={exportReport}><ArrowDownToLine size={16}/>{t('app.downloadQualityReport')}</button>
             </>}
             {step === 'export' && <>
-              <div className={'export-status '+(ready?'valid':'')}><span>{ready?<ShieldCheck size={30}/>:<TriangleAlert size={30}/>}</span><h3>{ready?t('app.readyForTheTrail'):t('app.aFewDetailsToResolve')}</h3><p>{ready?t('app.yourRouteIsReadyForFinalEncodingAnd'):t('app.resolveTheIssuesBelowBeforeDownloadingYourRoute')}</p></div>
+              <div className={'export-status '+(ready?'valid':'')}><span>{ready?<ShieldCheck size={30}/>:<TriangleAlert size={30}/>}</span><h3>{ready?t('app.readyForTheTrail'):t('app.aFewDetailsToResolve')}</h3><p>{ready?t('app.yourRouteIsReadyForFinalEncodingAnd'):t(processing ? 'app.waitForProcessing' : !confirmedRoute ? 'app.routeConfirmationRequired' : 'app.resolveTheIssuesBelowBeforeDownloadingYourRoute')}</p></div>
               {!confirmedRoute&&<button className="button button-secondary full-width" onClick={()=>go('route')}>{t('app.confirmRouteAndDirectionFirst')}<ArrowRight size={15}/></button>}<dl className="export-details"><div><dt>{t('app.format')}</dt><dd>TRL-X Route 1.0</dd></div><div><dt>{t('app.revision')}</dt><dd>{currentRevision}</dd></div><div><dt>{t('app.geometryNodes')}</dt><dd>{route ? number(route.geom.length) : '—'}</dd></div><div><dt>{t('app.elevationNodes')}</dt><dd>{route?.elev ? number(route.elev.length) : t('app.notIncluded')}</dd></div><div><dt>{t('app.estimatedSize')}</dt><dd>{route?'~ '+size(estimateBytes):'—'}</dd></div></dl>
               <button className="button button-primary full-width export-button" disabled={!ready} onClick={()=>void exportRoute()}><ArrowDownToLine size={18}/>{t('app.downloadRte')}</button>
               {exported&&<div className="success-card"><CheckCircle2 size={20}/><span><strong>{exported.filename}</strong><small>{t('app.exportDetails', { size: size(exported.bytes), revision: number(exported.revision) })}</small></span></div>}
               <button className="text-button full-width" onClick={exportReport}>{t('app.downloadProcessingReport')}<ArrowDownToLine size={14}/></button>
               <p className="small muted">{t('app.theFileIsDecodedAndFullyValidatedBefore')}</p>
             </>}
-            <IssuesList issues={issues} onLocate={s => { setCursorS(s); setMobileView('map'); }} />
-          </fieldset>
-          <div className="panel-footer"><button className="button button-ghost" disabled={!!busy} onClick={()=>go(STEPS[Math.max(0,stepIndex-1)])}><ArrowLeft size={16}/>{t('app.back')}</button>{stepIndex<5&&<button className="button button-primary" disabled={!!busy||(step==='route'&&!confirmedRoute)} onClick={()=>go(STEPS[stepIndex+1])}>{t('app.continue')}<ArrowRight size={16}/></button>}</div>
+            <IssuesList issues={visibleIssues} onLocate={s => { setCursorS(s); showView('map'); }} />
+            {step === 'route' && <label className="check-field"><input type="checkbox" checked={confirmedRoute} onChange={e=>{setConfirmedRoute(e.target.checked);if(!e.target.checked)setUnlockedStep(1);}}/><span>{t('app.iHaveCheckedTheRouteAndDirectionOn')}</span></label>}
+            </fieldset>
+          </div>
+          <div className="panel-footer"><button className="button button-ghost" disabled={!!busy} onClick={()=>go(STEPS[Math.max(0,stepIndex-1)])}><ArrowLeft size={16}/>{t('app.back')}</button>{stepIndex<5&&<button className="button button-primary" disabled={!canGo(STEPS[stepIndex+1])} onClick={()=>go(STEPS[stepIndex+1])}>{t('app.continue')}<ArrowRight size={16}/></button>}</div>
         </aside>
-        <div className={'visual-workspace mobile-'+mobileView}>
-          <div className="workspace-toolbar"><div className="view-switch"><button className={mobileView==='map'?'active':''} onClick={()=>setMobileView('map')}><MapPinned size={15}/>{t('app.map')}</button><button className={mobileView==='profile'?'active':''} onClick={()=>setMobileView('profile')}><Mountain size={15}/>{t('app.profile')}</button></div><span className="processing-label">{processing?<><LoaderCircle size={13} className="spin"/>{t('app.updating')}</>:<><span className="status-dot"/>{t('app.linkedPreview')}</>}</span><button className={'button button-small basemap-toggle '+(basemap?'on':'')} onClick={()=>setBasemap(!basemap)} aria-pressed={basemap}><Layers size={15}/>{t('app.basemap')}</button></div>
-          <div className="map-panel"><Suspense fallback={<div className="map-loading"><LoaderCircle className="spin"/>{t('app.loadingMap')}</div>}><RouteMap reference={editor.reference} stations={editor.stations} selectedStationId={selectedStationId} cursorS={cursorS} onCursorChange={setCursorS} onStationSelect={selectStation} onRouteClick={setCursorS} basemap={basemap}/></Suspense></div>
-          <div className="stats-strip"><div><span>{t('app.distance')}</span><strong>{km(totalM)}<small> km</small></strong></div><div><span>{t('app.ascent')}</span><strong>{lastElev?number(Math.round(lastElev.upDm/10)):'—'}<small>{lastElev?' m':''}</small></strong></div><div><span>{t('app.descent')}</span><strong>{lastElev?number(Math.round(lastElev.downDm/10)):'—'}<small>{lastElev?' m':''}</small></strong></div><div><span>{t('app.stationsLabel')}</span><strong>{editor.stations.length.toString().padStart(2,'0')}</strong></div></div>
-          <div className="profile-panel"><ElevationChart reference={editor.reference} route={route} stations={editor.stations} cursorS={cursorS} onCursorChange={setCursorS} onStationSelect={selectStation} compareSource={compareSource}/></div>
+        <div ref={workspaceRef} aria-busy={processing || !currentResult} className={'visual-workspace' + (stackedPreview ? ' visual-workspace--stacked' : '')}>
+          {!stackedPreview && <div className="workspace-toolbar">
+            <div className="view-switch">
+              <button aria-pressed={activeView==='map'} aria-controls="route-map-panel" className={activeView==='map'?'active':''} onClick={()=>showView('map')}><MapPinned size={15}/>{t('app.map')}</button>
+              <button aria-pressed={activeView==='profile'} aria-controls="route-profile-panel" className={activeView==='profile'?'active':''} onClick={()=>showView('profile')}><Mountain size={15}/>{t('app.profile')}</button>
+            </div>
+            <button className="icon-button preview-toggle" aria-expanded={!previewCollapsed} aria-controls="route-map-panel route-profile-panel" aria-label={t(previewCollapsed ? 'app.expandPreview' : 'app.collapsePreview')} title={t(previewCollapsed ? 'app.expandPreview' : 'app.collapsePreview')} onClick={()=>setPreviewCollapsed(value=>!value)}>
+              {previewCollapsed ? <Maximize2 size={16}/> : <Minimize2 size={16}/>}
+            </button>
+          </div>}
+          <div className="map-panel" id="route-map-panel" hidden={!stackedPreview && activeView!=='map'}><Suspense fallback={<div className="map-loading"><LoaderCircle className="spin"/>{t('app.loadingMap')}</div>}><RouteMap reference={editor.reference} stations={editor.stations} selectedStationId={selectedStationId} cursorS={cursorS} onCursorChange={setCursorS} onStationSelect={selectStation} onRouteClick={setCursorS} basemap={true}/></Suspense></div>
+          <div className="profile-panel" id="route-profile-panel" hidden={!stackedPreview && activeView!=='profile'}><ElevationChart reference={editor.reference} route={route} stations={editor.stations} cursorS={cursorS} onCursorChange={setCursorS} onStationSelect={selectStation} compareSource={compareSource}/></div>
+          <div className="route-progress"><label htmlFor="route-progress">{t('profile.routeProgress')}</label><input id="route-progress" type="range" min="0" max={Math.max(1,totalM)} step="1" value={cursorS??0} onChange={event=>setCursorS(Number(event.target.value))} aria-valuetext={km(cursorS??0)+' km'}/><output htmlFor="route-progress">{km(cursorS??0)} km</output></div>
+          <div className="stats-strip"><div><span>{t('app.distance')}</span><strong>{km(totalM)}<small> km</small></strong></div><div><span>{t('app.ascent')}</span><strong>{lastElev?number(Math.round(lastElev.upDm/10)):'—'}<small>{lastElev?' m':''}</small></strong></div><div><span>{t('app.descent')}</span><strong>{lastElev?number(Math.round(lastElev.downDm/10)):'—'}<small>{lastElev?' m':''}</small></strong></div><div><span>{t('app.stationsLabel')}</span><strong>{number(editor.stations.length)}</strong></div></div>
         </div>
       </section>}
-      <footer className="page-footer"><span>TRL-X ROUTE STUDIO <span>·</span> {t('app.madeForTheMilesAhead')}</span><span><ShieldCheck size={13}/>{t('app.onDeviceProcessing')}<span> / </span>GPX + KML → RTE</span></footer>
     </main>
     {notice&&<div className="toast" role="status"><CheckCircle2 size={18}/>{uiText(notice)}</div>}
     <Dialog.Root open={!!dialog} onOpenChange={open=>{if(!open)setDialog(null);}}><Dialog.Portal><Dialog.Overlay className="dialog-overlay"/><Dialog.Content className="dialog-content"><Dialog.Title>{dialog && uiText(dialog.title)}</Dialog.Title><Dialog.Description>{dialog && uiText(dialog.body)}</Dialog.Description><div className="dialog-actions"><Dialog.Close asChild><button className="button button-secondary">{t('app.keepEditing')}</button></Dialog.Close><button className="button button-primary" onClick={()=>{const run=dialog?.run;setDialog(null);run?.();}}>{t('app.rebuildRoute')}</button></div><Dialog.Close className="dialog-close" aria-label={t('app.close')}><X size={18}/></Dialog.Close></Dialog.Content></Dialog.Portal></Dialog.Root>

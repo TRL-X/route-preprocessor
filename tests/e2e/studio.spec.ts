@@ -13,8 +13,19 @@ async function importText(page: Page, content: string, name = 'forest.gpx') {
   await page.getByLabel('Choose route file', { exact: true }).setInputFiles({ name, mimeType: 'application/xml', buffer: Buffer.from(content) });
   await expect(page.getByLabel('Route name', { exact: true })).toBeVisible();
 }
+const stepNames = ['Import', 'Route', 'Stations', 'Elevation', 'Review', 'Export'];
 async function step(page: Page, name: string) {
-  await page.getByRole('navigation', { name: 'Route preparation steps' }).getByRole('button', { name: new RegExp(name) }).click();
+  const current = await page.locator('.panel-heading h2').textContent();
+  const from = stepNames.indexOf(current!);
+  const to = stepNames.indexOf(name);
+  if (to > from) {
+    for (let index = from + 1; index <= to; index++) {
+      await page.getByRole('navigation').getByRole('button', { name: new RegExp(stepNames[index]) }).click();
+      await expect(page.locator('.panel-heading h2')).toHaveText(stepNames[index]);
+    }
+  } else {
+    await page.getByRole('navigation').getByRole('button', { name: new RegExp(name) }).click();
+  }
   await expect(page.locator('.panel-heading h2')).toHaveText(name);
 }
 async function confirmRoute(page: Page) {
@@ -49,7 +60,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('landing is usable on both screen sizes and rejects invalid input without losing the editor', async ({ page }) => {
-  await expect(page.getByRole('heading', { name: 'A better route starts here.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Import route file' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Choose a file', exact: true })).toBeVisible();
   await noOverflow(page);
   await page.getByLabel('Choose route file', { exact: true }).setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a route') });
@@ -78,10 +89,13 @@ test('cannot bypass route confirmation or change steps during a pending export',
   });
   await page.reload();
   await importText(page, gpx(complete));
-  await step(page, 'Export');
-  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Confirm route and direction first', exact: true }).click();
+  for (const name of ['Stations', 'Elevation', 'Review', 'Export']) {
+    await expect(page.getByRole('navigation').getByRole('button', { name: new RegExp(name) })).toBeDisabled();
+  }
+  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
   await confirmRoute(page);
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Review/ })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await step(page, 'Review');
   await expect(page.locator('.stage-row')).toHaveCount(1);
   await step(page, 'Export');
@@ -89,7 +103,7 @@ test('cannot bypass route confirmation or change steps during a pending export',
   await page.getByRole('button', { name: 'Download .rte', exact: true }).click();
   const navigation = page.getByRole('navigation', { name: 'Route preparation steps' });
   for (const button of await navigation.getByRole('button').all()) await expect(button).toBeDisabled();
-  await expect(page.locator('.panel-body')).toHaveAttribute('disabled', '');
+  await expect(page.locator('.panel-fields')).toHaveAttribute('disabled', '');
   await expect(page.getByRole('button', { name: 'Download processing report', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
   const file = await download;
@@ -101,10 +115,10 @@ test('edits stations, undoes deletion, exports valid bytes, and restores a draft
   await importText(page, gpx(complete));
   await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
   await confirmRoute(page);
-  if (isMobile) await page.getByRole('button', { name: 'Profile', exact: true }).click();
+  if (await page.getByRole('button', { name: 'Profile', exact: true }).isVisible()) await page.getByRole('button', { name: 'Profile', exact: true }).click();
   const progress = page.getByRole('slider', { name: 'Route progress', exact: true });
   await progress.fill('30');
-  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await page.getByRole('button', { name: 'Add station', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('Spring water');
   await page.getByLabel('Short label', { exact: true }).fill('WATER');
   await page.getByRole('combobox', { name: 'Type', exact: true }).selectOption('3');
@@ -123,14 +137,15 @@ test('edits stations, undoes deletion, exports valid bytes, and restores a draft
   expect(first.route.stations.find(station => station.name === 'Spring water')).toMatchObject({ kind: 3, sDm: 300 });
   const repeated = await downloadRoute(page);
   expect(repeated.bytes).toEqual(first.bytes);
-  await expect(page.getByText('Saved on this device', { exact: true })).toBeVisible();
+  await expect(page.getByRole('status', { name: 'Saved on this device', exact: true })).toBeVisible();
   await page.reload();
-  await page.getByRole('button', { name: /Pick up where you left off/ }).click();
+  await page.getByRole('button', { name: /Continue editing/ }).click();
   await expect(page.getByLabel('Route name', { exact: true })).toHaveValue('Forest trail');
   const restored = await downloadRoute(page);
   expect(restored.bytes).toEqual(first.bytes);
   await step(page, 'Route');
   await page.getByLabel('Route name', { exact: true }).fill('Forest trail updated');
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   const changed = await downloadRoute(page);
   expect(changed.route.routeId).toEqual(first.route.routeId);
   expect(changed.route.revision).toBe(2);
@@ -142,9 +157,10 @@ test('requires a deliberate visit choice at repeated crossings', async ({ page }
   await importText(page, gpx(crossing, '<wpt lat="0" lon="0.001"><name>Crossing CP</name></wpt>'));
   await confirmRoute(page);
   await expect(page.getByText('1 station position needs your confirmation.', { exact: true })).toBeVisible();
-  await step(page, 'Export');
-  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
-  await expect(page.locator('.issue strong', { hasText: 'STATION_UNCONFIRMED' })).toBeVisible();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Elevation/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
+  await expect(page.locator('.issue[data-code="STATION_UNCONFIRMED"]')).toBeVisible();
   await step(page, 'Stations');
   await page.locator('.station-row', { hasText: 'Crossing CP' }).click();
   await expect(page.locator('.candidate')).toHaveCount(2);
@@ -159,13 +175,14 @@ test('interpolates only an explicitly selected short interior elevation gap', as
   await importText(page, gpx([[0, 0, 100], [0, 0.0001, null], [0, 0.0002, 120]]));
   await confirmRoute(page);
   await step(page, 'Elevation');
-  await expect(page.getByRole('radio', { name: /Route geometry only/ })).toBeChecked();
+  await expect(page.getByRole('radio', { name: /Omit elevation/ })).toBeChecked();
   await page.getByRole('radio', { name: /Use source elevation/ }).check();
-  await expect(page.locator('.issue strong', { hasText: 'INCOMPLETE_ELEVATION' })).toBeVisible();
-  await step(page, 'Export');
-  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
+  await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Review/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await step(page, 'Elevation');
-  await page.getByRole('radio', { name: /Fill short interior gaps/ }).check();
+  await page.getByRole('radio', { name: /Fill short gaps and export/ }).check();
   const exported = await downloadRoute(page);
   expect(exported.route.elevationInfo?.containsFilledValues).toBe(true);
   expect(exported.route.elev!.at(-1)!.upDm).toBe(200);
@@ -175,9 +192,10 @@ test('rejects unknown endpoint elevation and supports a geometry-only export', a
   await importText(page, gpx([[0, 0, null], [0, 0.0001, 110], [0, 0.0002, 120]]));
   await confirmRoute(page);
   await step(page, 'Elevation');
-  await page.getByRole('radio', { name: /Fill short interior gaps/ }).check();
-  await expect(page.locator('.issue strong', { hasText: 'INCOMPLETE_ELEVATION' })).toBeVisible();
-  await page.getByRole('radio', { name: /Route geometry only/ }).check();
+  await page.getByRole('radio', { name: /Fill short gaps and export/ }).check();
+  await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Review/ })).toBeDisabled();
+  await page.getByRole('radio', { name: /Omit elevation/ }).check();
   const exported = await downloadRoute(page);
   expect(exported.route.elev).toBeUndefined();
   expect(exported.route.elevationInfo).toBeUndefined();
@@ -188,10 +206,10 @@ test('keeps KML altitude uncertainty explicit and records accepted provenance', 
   await confirmRoute(page);
   await step(page, 'Elevation');
   await page.getByRole('radio', { name: /Use source elevation/ }).check();
-  const acceptance = page.getByRole('checkbox', { name: /I accept the source/ });
+  const acceptance = page.getByRole('checkbox', { name: /I confirm these values/ });
   await expect(acceptance).not.toBeChecked();
-  await step(page, 'Export');
-  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await step(page, 'Elevation');
   await acceptance.check();
   const exported = await downloadRoute(page);
@@ -209,22 +227,25 @@ for (const extension of ['gpx', 'kml']) {
     expect(await rows.count()).toBeGreaterThan(2);
     for (let index = 0; index < await rows.count(); index++) {
       await rows.nth(index).click();
-      const confirm = page.getByRole('button', { name: 'Confirm this visit', exact: true });
+      const confirm = page.getByRole('button', { name: 'Confirm station position', exact: true });
       if (await confirm.count()) await confirm.click();
     }
     await step(page, 'Elevation');
-    await page.getByRole('radio', { name: /Route geometry only/ }).check();
+    await page.getByRole('radio', { name: /Omit elevation/ }).check();
     if (isMobile) {
-      await page.getByRole('button', { name: 'Profile', exact: true }).click();
+      if (await page.getByRole('button', { name: 'Profile', exact: true }).isVisible()) await page.getByRole('button', { name: 'Profile', exact: true }).click();
       await expect(page.getByRole('slider', { name: 'Route progress', exact: true })).toBeVisible();
-      await page.getByRole('button', { name: 'Map', exact: true }).click();
+      if (await page.getByRole('button', { name: 'Map', exact: true }).isVisible()) await page.getByRole('button', { name: 'Map', exact: true }).click();
       const mapBounds = await page.locator('.route-map').boundingBox();
       const panelBounds = await page.locator('.map-panel').boundingBox();
       expect(mapBounds!.height).toBeLessThanOrEqual(panelBounds!.height);
     }
     const drawingBounds = await page.locator('.maplibregl-canvas, .route-map__sketch').first().boundingBox();
-    expect(drawingBounds!.height).toBeGreaterThan(200);
+    expect(drawingBounds!.height).toBeGreaterThan(isMobile ? 120 : 200);
     expect(drawingBounds!.width).toBeGreaterThan(200);
+    if (await page.getByRole('button', { name: 'Fit entire route', exact: true }).count()) {
+      await expect(page.getByRole('button', { name: 'Fit entire route', exact: true })).toBeInViewport({ ratio: 1 });
+    }
     await noOverflow(page);
     const exported = await downloadRoute(page);
     expect(exported.route.totalSDm).toBeGreaterThan(150_000);
@@ -242,7 +263,7 @@ test('switches and remembers the locale without changing route data or export id
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
   await expect(page.locator('.panel-heading h2')).toHaveText('导出');
   await expect(page.getByRole('region', { name: '交互式路线地图' })).toBeAttached();
-  await expect(page.getByRole('heading', { name: 'Forest trail', exact: true })).toBeVisible();
+  await expect(page.locator('.title-row')).toHaveCount(0);
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载 .rte', exact: true }).click();
   const downloadedPath = await (await downloadPromise).path();
@@ -253,4 +274,58 @@ test('switches and remembers the locale without changing route data or export id
   await page.getByRole('combobox', { name: '语言', exact: true }).selectOption('en');
   await expect(page.getByRole('button', { name: 'Choose a file', exact: true })).toBeVisible();
   await noOverflow(page);
+});
+
+
+test('restored legacy diagnostics follow the selected language without displaying raw codes', async ({ page }) => {
+  await importText(page, gpx(complete));
+  await expect(page.getByRole('status', { name: 'Saved on this device', exact: true })).toBeVisible();
+  // Reproduce drafts written before diagnostics stored interpolation parameters.
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open('trl-x-route-studio');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('drafts', 'readwrite');
+      const store = tx.objectStore('drafts');
+      const current = store.get('current');
+      current.onsuccess = () => {
+        const draft = current.result;
+        draft.editor.reference.issues = [
+          { code: 'DUPLICATE_COORDINATES', severity: 'warning', message: 'Consecutive duplicate coordinates were merged without changing traversal order. Count: 5.' },
+          { code: 'ELEVATION_CONFLICT', severity: 'warning', message: 'Conflicting elevations at repeated coordinates are marked missing. Count: 1.' },
+          { code: 'ELEVATION_MISSING', severity: 'warning', message: 'Some route points have no elevation. Zero elevation is preserved as valid data. Count: 8.' },
+          { code: 'LARGE_SOURCE_EDGE', severity: 'warning', message: 'Some adjacent source coordinates are more than 1 km apart. Check their connections on the map. Count: 2.' },
+        ];
+        store.put(draft, 'current');
+      };
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    };
+  }));
+  await page.reload();
+  await page.getByRole('button', { name: /Continue editing/ }).click();
+  await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh');
+  const notes = page.locator('.issues-list');
+  await expect(notes.locator('summary')).toHaveCount(0);
+  await expect(notes.locator('.issue strong')).toHaveText(['路线点间距过大']);
+  await expect(notes).toContainText('2 段相邻源坐标相距超过 1 km');
+  await expect(notes).not.toContainText('高程');
+  await expect(notes).not.toContainText('重复坐标');
+  await expect(notes).not.toContainText('Count:');
+  await expect(notes).not.toContainText('DUPLICATE_COORDINATES');
+  await page.getByRole('combobox', { name: '语言', exact: true }).selectOption('en');
+  await expect(notes.locator('.issue').first()).toContainText('Count: 2.');
+  await expect(notes.locator('.issue strong').first()).toHaveText('Large gap between route points');
+  await confirmRoute(page);
+  await step(page, 'Review');
+  await expect(page.locator('.issues-list')).toHaveCount(0);
+  const reportDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download processing report', exact: true }).click();
+  const report = JSON.parse(await readFile((await (await reportDownload).path())!, 'utf8'));
+  expect(report.issues.map((issue: { code: string }) => issue.code)).toEqual([
+    'DUPLICATE_COORDINATES', 'ELEVATION_CONFLICT', 'ELEVATION_MISSING', 'LARGE_SOURCE_EDGE',
+  ]);
+  expect(report.issues[0].message).toContain('Count: 5.');
+
 });
