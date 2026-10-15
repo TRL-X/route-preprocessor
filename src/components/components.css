@@ -1,0 +1,60 @@
+.route-map { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; background: #ebece3; border-radius: inherit; isolation: isolate; }
+.route-map .route-map__canvas { position: absolute; inset: 0; }
+.route-map--plain::after { content: ''; position: absolute; inset: 0; background-image: linear-gradient(#9aa88b16 1px, transparent 1px), linear-gradient(90deg, #9aa88b16 1px, transparent 1px); background-size: 44px 44px; pointer-events: none; z-index: 1; }
+.route-map__north { position: absolute; top: 21px; left: 23px; z-index: 2; display: grid; justify-items: center; gap: 4px; color: #466048; font-size: 10px; font-weight: 600; line-height: 1.1; pointer-events: none; text-shadow: 0 1px 3px #fff; }
+.route-map__north svg { width: 17px; height: 23px; fill: #466048; stroke: #fffdf5; stroke-width: 1px; }
+.route-map__controls { position: absolute; top: 20px; right: 20px; z-index: 3; display: flex; flex-direction: column; background: #fffef9; border: 1px solid #d4d9cd; border-radius: 11px; box-shadow: 0 3px 10px #283d2520; overflow: hidden; }
+.route-map__controls button { display: grid; place-items: center; width: 43px; height: 43px; border: 0; padding: 0; border-radius: 0; color: #355b45; background: transparent; font: 400 23px/1 system-ui, sans-serif; cursor: pointer; }
+.route-map__controls button + button { border-top: 1px solid #e5e7df; }
+.route-map__controls button:hover { background: #f0f4e7; }
+.route-map__controls button:focus-visible { outline: 3px solid #8ca94e; outline-offset: -3px; }
+.route-map__controls button:disabled { opacity: 0.4; cursor: default; }
+.route-map__controls svg { width: 21px; height: 21px; }
+.route-map__legend { position: absolute; bottom: 18px; left: 20px; z-index: 2; display: flex; align-items: center; gap: 9px; background: #fffdf5ec; border: 1px solid #d5dacc; border-radius: 8px; padding: 9px 12px; font-size: 11px; font-weight: 600; color: #526249; box-shadow: 0 2px 8px #263c2710; pointer-events: none; }
+.route-map__legend-line { width: 23px; height: 3px; background: #355b45; border-radius: 2px; }
+.route-map__legend-divider { height: 10px; width: 1px; margin: 0 3px; background: #cdd4c3; }
+.route-map__status { position: absolute; left: 20px; bottom: 62px; z-index: 2; padding: 5px 8px; border-radius: 5px; background: #fffdf5d9; color: #60705b; font-size: 10px; pointer-events: none; }
+.route-map__sketch { position: absolute; inset: 0; width: 100%; height: 100%; }
+.route-map__sketch-hit, .route-map__sketch-station { cursor: pointer; }
+.route-map__sketch-station:focus-visible { outline: none; stroke: #83a442; stroke-width: 3px; }
+.route-map .maplibregl-ctrl-attrib { font-family: inherit; font-size: 10px; background: #fffdf5dd; }
+.route-map .maplibregl-ctrl-attrib a { color: #53674a; }
+.route-map .maplibregl-ctrl-bottom-right { z-index: 3; }
+.route-map .maplibregl-canvas:focus-visible { outline: 3px solid #8ca94e; outline-offset: -3px; }
+.elevation-chart { color: #3d4b37; width: 100%; padding: 18px 21px 12px; box-sizing: border-box; overflow: hidden; }
+.elevation-chart__heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 9px; }
+.elevation-chart__title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.elevation-chart__title > svg { width: 18px; height: 18px; }
+.elevation-chart__title h3 { margin: 0; font: inherit; font-size: 12px; font-weight: 650; }
+.elevation-chart__badge { border-radius: 4px; background: #e9eede; padding: 3px 5px; font-size: 9px; color: #687557; }
+.elevation-chart__readout { display: flex; align-items: center; gap: 12px; white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums; }
+.elevation-chart__readout span { color: #7d8674; }
+.elevation-chart__svg { width: 100%; height: 164px; display: block; overflow: visible; touch-action: pan-y; cursor: crosshair; }
+.elevation-chart__axis { font-family: inherit; font-size: 10px; fill: #8a9281; }
+.elevation-chart__station { cursor: pointer; }
+.elevation-chart__footer { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; color: #7c8771; }
+.elevation-chart__comparison-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 8px 0; color: #7c8771; font-size: 10px; }
+.elevation-chart__comparison-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.elevation-chart__comparison-legend i { width: 18px; border-top: 2px solid #557749; }
+.elevation-chart__comparison-legend span + span i { border-top: 2px dashed #929b8b; }
+.elevation-chart__empty { min-height: 128px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 18px; color: #8a9381; font-size: 12px; text-align: center; }
+.elevation-chart__empty-line { display: block; width: min(70%, 420px); height: 1px; background: repeating-linear-gradient(90deg, #ccd4c1 0, #ccd4c1 5px, transparent 5px, transparent 10px); }
+.elevation-chart__slider-row { display: flex; align-items: center; gap: 14px; min-height: 35px; margin-top: 5px; }
+.elevation-chart__slider-row label { font-size: 10px; color: #78836d; white-space: nowrap; }
+.elevation-chart__slider-row input { flex: 1; min-width: 40px; height: 26px; margin: 0; accent-color: #667e43; cursor: pointer; }
+.elevation-chart__slider-row input:focus-visible { outline: 2px solid #8ca94e; outline-offset: 3px; border-radius: 5px; }
+@media (max-width: 640px) {
+  .route-map__controls { top: 14px; right: 14px; }
+  .route-map__controls button { width: 44px; height: 44px; }
+  .route-map__north { top: 17px; left: 17px; }
+  .route-map__legend { left: 13px; bottom: 52px; padding: 7px 9px; font-size: 10px; }
+  .route-map__status { left: 13px; bottom: 89px; }
+  .elevation-chart { padding: 14px 13px 9px; }
+  .elevation-chart__heading { gap: 8px; flex-wrap: wrap; }
+  .elevation-chart__readout { margin-left: auto; }
+  .elevation-chart__svg { height: 140px; }
+  .elevation-chart__footer { font-size: 9px; }
+  .elevation-chart__footer span:last-child { text-align: right; }
+  .elevation-chart__slider-row { min-height: 42px; }
+}
+@media (prefers-reduced-motion: reduce) { .route-map *, .elevation-chart * { scroll-behavior: auto; } }

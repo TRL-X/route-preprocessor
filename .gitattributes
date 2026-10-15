@@ -1,0 +1,3 @@
+# Keep imported sample bytes identical to their recorded SHA-256 checksums.
+tests/fixtures/routes/**/*.gpx -text
+tests/fixtures/routes/**/*.kml -text

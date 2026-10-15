@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "dataset": "2026MY",
+  "imported_on": "2026-10-15",
+  "source": "User-provided route sample directory",
+  "files": [
+    {
+      "file": "DMY100K.gpx",
+      "route_group": "DMY100K",
+      "format": "gpx",
+      "size_bytes": 783839,
+      "sha256": "fb2a2a8f5927be93e4737c2a6fc172f515cf06f5b4f30687f6596aebe638f6ed",
+      "observed": {
+        "segment_point_counts": [
+          6588
+        ],
+        "point_count": 6588,
+        "landmark_count": 10,
+        "missing_elevation_count": 17,
+        "candidate_elevation_min_m": 651.0,
+        "candidate_elevation_max_m": 1656.0,
+        "consecutive_same_coordinate_pairs": 9,
+        "same_coordinate_elevation_conflict_pairs": 0
+      }
+    },
+    {
+      "file": "DMY100K.kml",
+      "route_group": "DMY100K",
+      "format": "kml",
+      "size_bytes": 212821,
+      "sha256": "5f8583ca08294fd54b82e5cfec9ecb34889168ec66ce8ef9f705fe412bb75ca0",
+      "observed": {
+        "segment_point_counts": [
+          6588
+        ],
+        "point_count": 6588,
+        "landmark_count": 12,
+        "missing_elevation_count": 0,
+        "candidate_elevation_min_m": 651.0,
+        "candidate_elevation_max_m": 1656.0,
+        "consecutive_same_coordinate_pairs": 10,
+        "same_coordinate_elevation_conflict_pairs": 5,
+        "line_altitude_modes": [
+          null
+        ]
+      }
+    },
+    {
+      "file": "EMY20K.gpx",
+      "route_group": "EMY20K",
+      "format": "gpx",
+      "size_bytes": 155111,
+      "sha256": "07b714cc355a62fb57c8f06f47e0c9a0fec5127945d9f18ce49e532cde7b1a75",
+      "observed": {
+        "segment_point_counts": [
+          1898
+        ],
+        "point_count": 1898,
+        "landmark_count": 3,
+        "missing_elevation_count": 8,
+        "candidate_elevation_min_m": 636.0,
+        "candidate_elevation_max_m": 1359.0,
+        "consecutive_same_coordinate_pairs": 5,
+        "same_coordinate_elevation_conflict_pairs": 1
+      }
+    },
+    {
+      "file": "EMY20K.kml",
+      "route_group": "EMY20K",
+      "format": "kml",
+      "size_bytes": 64484,
+      "sha256": "122598243887c1400d68582759e67bdf001c2151d1c47fe0086fbf7d7e4b5059",
+      "observed": {
+        "segment_point_counts": [
+          1898
+        ],
+        "point_count": 1898,
+        "landmark_count": 5,
+        "missing_elevation_count": 0,
+        "candidate_elevation_min_m": 636.0,
+        "candidate_elevation_max_m": 1359.0,
+        "consecutive_same_coordinate_pairs": 6,
+        "same_coordinate_elevation_conflict_pairs": 6,
+        "line_altitude_modes": [
+          null
+        ]
+      }
+    },
+    {
+      "file": "MMY50K.gpx",
+      "route_group": "MMY50K",
+      "format": "gpx",
+      "size_bytes": 802374,
+      "sha256": "a4bfe5d50a2d5767c120a01e005264a7d787fdb155ef53e1b21a5ac0234b5855",
+      "observed": {
+        "segment_point_counts": [
+          6749
+        ],
+        "point_count": 6749,
+        "landmark_count": 6,
+        "missing_elevation_count": 10,
+        "candidate_elevation_min_m": 651.0,
+        "candidate_elevation_max_m": 1603.0,
+        "consecutive_same_coordinate_pairs": 19,
+        "same_coordinate_elevation_conflict_pairs": 1
+      }
+    },
+    {
+      "file": "MMY50K.kml",
+      "route_group": "MMY50K",
+      "format": "kml",
+      "size_bytes": 208210,
+      "sha256": "12d7a51addc2fbbf79b3daab9dfa82dd5e0d701e58cebd331001acad67fe3db1",
+      "observed": {
+        "segment_point_counts": [
+          6749
+        ],
+        "point_count": 6749,
+        "landmark_count": 8,
+        "missing_elevation_count": 0,
+        "candidate_elevation_min_m": 651.0,
+        "candidate_elevation_max_m": 1603.0,
+        "consecutive_same_coordinate_pairs": 25,
+        "same_coordinate_elevation_conflict_pairs": 9,
+        "line_altitude_modes": [
+          null
+        ]
+      }
+    },
+    {
+      "file": "UMY100M.gpx",
+      "route_group": "UMY100M",
+      "format": "gpx",
+      "size_bytes": 1466456,
+      "sha256": "923e2c818e9854d975c28dd5e035fa764671d126bada21852fbc3a086671335f",
+      "observed": {
+        "segment_point_counts": [
+          12324
+        ],
+        "point_count": 12324,
+        "landmark_count": 16,
+        "missing_elevation_count": 47,
+        "candidate_elevation_min_m": 651.0,
+        "candidate_elevation_max_m": 1656.0,
+        "consecutive_same_coordinate_pairs": 33,
+        "same_coordinate_elevation_conflict_pairs": 12
+      }
+    },
+    {
+      "file": "UMY100M.kml",
+      "route_group": "UMY100M",
+      "format": "kml",
+      "size_bytes": 390263,
+      "sha256": "b9f258bf8f5760e545a37879847c199f87404e1c93ca90d267b1c496c06b1a84",
+      "observed": {
+        "segment_point_counts": [
+          12324
+        ],
+        "point_count": 12324,
+        "landmark_count": 18,
+        "missing_elevation_count": 0,
+        "candidate_elevation_min_m": 651.0,
+        "candidate_elevation_max_m": 1656.0,
+        "consecutive_same_coordinate_pairs": 34,
+        "same_coordinate_elevation_conflict_pairs": 23,
+        "line_altitude_modes": [
+          null
+        ]
+      }
+    }
+  ]
+}
