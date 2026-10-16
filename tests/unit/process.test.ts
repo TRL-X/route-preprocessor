@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { IMPORT_LIMITS, parseRouteFile } from '../../src/core/import';
-import { buildReference, createStations, distanceM, matchLandmark, MAX_GEOMETRY_EDGE_M, MAX_INTERPOLATION_GAP_M, positionAt, processRoute, quantize } from '../../src/core/process';
+import { buildReference, createStations, distanceM, matchLandmark, MAX_GEOMETRY_EDGE_M, ELEVATION_GAP_WARNING_M, positionAt, processRoute, quantize } from '../../src/core/process';
 import type { ProcessingOptions, RouteIdentity, SourcePoint, SourceRoute } from '../../src/core/types';
 import { decodeRte, encodeRte } from '../../src/core/rte';
 
@@ -200,25 +200,60 @@ describe('preprocessing, profile sampling, and quantization', () => {
     expect(decodeRte(encodeRte(smooth)).elev).toEqual(smooth.elev);
   });
 
-  it('only repairs explicitly requested short interior gaps and records filled provenance', () => {
+  it('repairs explicitly requested interior gaps and records filled provenance', () => {
     const reference = buildReference(source([point(0, 0, 0), point(0, 0.0001, null), point(0, 0.0002, 20)]));
     const stations = createStations(reference, []);
     expect(processRoute(reference, stations, options, identity).route).toBeNull();
     const result = processRoute(reference, stations, { ...options, elevationMode: 'interpolate' }, identity);
     expect(result.route!.elevationInfo!.containsFilledValues).toBe(true);
     expect(result.route!.elev!.at(-1)!.upDm).toBe(200);
-    expect(MAX_INTERPOLATION_GAP_M).toBe(100);
+    expect(ELEVATION_GAP_WARNING_M).toBe(100);
   });
 
   it.each([
     [point(0, 0, null), point(0, 0.0001, 10)],
-    [point(0, 0, 0), point(0, 0.0001, null)],
-    [point(0, 0, 0), point(0, 0.001, null), point(0, 0.002, 20)],
-  ])('never extrapolates an endpoint or bridges a long unknown gap', (...points: SourcePoint[]) => {
+    [point(0, 0, 10), point(0, 0.0001, null)],
+    [point(0, 0, null), point(0, 0.0001, 10), point(0, 0.0002, null)],
+  ])('fills missing endpoints using the nearest known elevation', (...points: SourcePoint[]) => {
     const reference = buildReference(source(points));
     const result = processRoute(reference, createStations(reference, []), { ...options, elevationMode: 'interpolate' }, identity);
-    expect(result.route).toBeNull();
-    expect(result.issues.some((value) => value.code === 'INCOMPLETE_ELEVATION')).toBe(true);
+    expect(result.route!.elev!.every(node => node.hDm === 100)).toBe(true);
+    expect(result.route!.elevationInfo!.containsFilledValues).toBe(true);
+    expect(result.issues.some(value => value.severity === 'error' || value.code === 'ELEVATION_LARGE_GAP')).toBe(false);
+  });
+
+  it('fills long gaps by distance and warns without blocking export', () => {
+    const reference = buildReference(source([point(0, 0, 0), point(0, 0.001, null), point(0, 0.003, 30)]));
+    const result = processRoute(reference, createStations(reference, []), { ...options, elevationMode: 'interpolate' }, identity);
+    expect(result.route!.elev!.find(node => node.sDm === 1000)!.hDm).toBe(90);
+    expect(result.route!.elev!.at(-1)!.hDm).toBe(300);
+    expect(result.issues.filter(value => value.code === 'ELEVATION_LARGE_GAP')).toEqual([
+      { code: 'ELEVATION_LARGE_GAP', severity: 'warning', s: reference.points[1].s, params: { limit: 100, distance: Math.round(reference.totalM * 100) / 100 } },
+    ]);
+    expect(decodeRte(encodeRte(result.route!)).elev).toEqual(result.route!.elev);
+    expect(reference.points[1].elevation).toBeNull();
+  });
+
+  it('fills the UMY100M route and reports both gaps over 100 m', () => {
+    const parsed = parseRouteFile(readFileSync(`${fixtureDirectory}/UMY100M.gpx`, 'utf8'), 'UMY100M.gpx');
+    const reference = buildReference(parsed.routes[0]);
+    const result = processRoute(reference, createStations(reference, []), { ...options, elevationMode: 'interpolate' }, identity);
+    const warnings = result.issues.filter(value => value.code === 'ELEVATION_LARGE_GAP');
+    expect(warnings.map(value => value.params?.distance)).toEqual([184.98, 109.64]);
+    expect(warnings.map(value => Math.round(value.s!))).toEqual([60566, 138855]);
+    expect(result.route!.elevationInfo!.containsFilledValues).toBe(true);
+    expect(decodeRte(encodeRte(result.route!)).elev).toEqual(result.route!.elev);
+  });
+
+  it('warns for long endpoint gaps and cannot fill a profile with no known elevation', () => {
+    const reference = buildReference(source([point(0, 0, null), point(0, 0.002, 10), point(0, 0.004, null)]));
+    const result = processRoute(reference, createStations(reference, []), { ...options, elevationMode: 'interpolate' }, identity);
+    expect(result.route).not.toBeNull();
+    expect(result.issues.filter(value => value.code === 'ELEVATION_LARGE_GAP')).toHaveLength(2);
+    const unknown = buildReference(source([point(0, 0, null), point(0, 0.001, null)]));
+    const failed = processRoute(unknown, createStations(unknown, []), { ...options, elevationMode: 'interpolate' }, identity);
+    expect(failed.route).toBeNull();
+    expect(failed.issues.some(value => value.code === 'INCOMPLETE_ELEVATION')).toBe(true);
   });
 
   it('requires explicit KML elevation acceptance and keeps datum unknown', () => {

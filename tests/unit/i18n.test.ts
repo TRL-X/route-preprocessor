@@ -51,7 +51,7 @@ describe('language resources', () => {
     expect(diagnosticText(instance, legacy)).toBe('已合并 5 个连续重复坐标，保留经过顺序。');
     expect(diagnosticText(instance, { code: 'ELEVATION_CONFLICT', message: 'Conflicting elevations at repeated coordinates are marked missing. Count: 1.' })).toContain('1 处重复坐标');
     expect(diagnosticText(instance, { code: 'ELEVATION_MISSING', message: 'Some route points have no elevation. Count: 8.' })).toBe('8 个有效路线点缺少高程。');
-    expect(diagnosticText(instance, { code: 'INCOMPLETE_ELEVATION', message: 'Only interior gaps of at most 100 m can be filled.' })).toContain('100 米');
+    expect(diagnosticText(instance, { code: 'INCOMPLETE_ELEVATION', message: 'Only interior gaps of at most 100 m can be filled.' })).toContain('补全缺口后导出');
     await instance.changeLanguage('en');
     expect(diagnosticText(instance, legacy)).toContain('Count: 5.');
   });

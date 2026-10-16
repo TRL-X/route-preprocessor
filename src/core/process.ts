@@ -1,7 +1,7 @@
 import { cleanLabel } from './import';
 import type { DraftStation, ElevNode, GeomNode, MatchCandidate, ProcessingIssue, ProcessingOptions, ProcessingResult, ReferencePoint, ReferenceRoute, RouteIdentity, SourceLandmark, SourcePoint, SourceRoute, Stage, StationEvent } from './types';
 
-export const MAX_INTERPOLATION_GAP_M = 100;
+export const ELEVATION_GAP_WARNING_M = 100;
 export const MAX_GEOMETRY_EDGE_M = 250;
 const EARTH_RADIUS_M = 6_371_008.8;
 const RAD = Math.PI / 180;
@@ -273,11 +273,19 @@ function repairedProfile(reference: ReferenceRoute, mode: ProcessingOptions['ele
     while (index < points.length && points[index].elevation === null) index++;
     const left = points[firstMissing - 1];
     const right = points[index];
-    if (mode !== 'interpolate' || !left || !right || right.s - left.s > MAX_INTERPOLATION_GAP_M) {
-      issues.push(issue('INCOMPLETE_ELEVATION', { limit: MAX_INTERPOLATION_GAP_M }, 'error', points[firstMissing].s));
+    if (mode !== 'interpolate' || (!left && !right)) {
+      issues.push(issue('INCOMPLETE_ELEVATION', {}, 'error', points[firstMissing].s));
       return null;
     }
-    for (let gap = firstMissing; gap < index; gap++) points[gap].elevation = left.elevation! + (right.elevation! - left.elevation!) * (points[gap].s - left.s) / (right.s - left.s);
+    const span = (right?.s ?? points[points.length - 1].s) - (left?.s ?? points[0].s);
+    if (span > ELEVATION_GAP_WARNING_M) {
+      issues.push(issue('ELEVATION_LARGE_GAP', { limit: ELEVATION_GAP_WARNING_M, distance: Math.round(span * 100) / 100 }, 'warning', points[firstMissing].s));
+    }
+    for (let gap = firstMissing; gap < index; gap++) {
+      points[gap].elevation = left && right
+        ? left.elevation! + (right.elevation! - left.elevation!) * (points[gap].s - left.s) / (right.s - left.s)
+        : (left ?? right).elevation!;
+    }
     filled = true;
   }
   return { points, filled };
@@ -325,7 +333,7 @@ function elevation(reference: ReferenceRoute, boundaryDm: number[], options: Pro
     if (node.upDm > UINT32_MAX || node.downDm > UINT32_MAX) { issues.push(issue('ELEVATION_TOTAL_RANGE')); return null; }
     nodes.push(node);
   }
-  if (profile.filled) issues.push(issue('ELEVATION_FILLED', { limit: MAX_INTERPOLATION_GAP_M }, 'warning'));
+  if (profile.filled) issues.push(issue('ELEVATION_FILLED', {}, 'warning'));
   return { nodes, filled: profile.filled };
 }
 

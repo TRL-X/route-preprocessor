@@ -16,7 +16,7 @@ test('captures the actual EMY20K route and elevation editor', async ({ page, isM
     if (await confirm.count()) await confirm.click();
   }
   await page.getByRole('navigation', { name: 'Route preparation steps' }).getByRole('button', { name: /Elevation/ }).click();
-  await page.getByRole('radio', { name: /Fill short gaps and export/ }).check();
+  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
   await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
   // The real sample may have unfillable endpoint gaps. The source profile remains visible.
   if (await page.locator('.issue.error').count()) {

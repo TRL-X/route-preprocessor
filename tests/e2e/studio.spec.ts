@@ -182,23 +182,23 @@ test('interpolates only an explicitly selected short interior elevation gap', as
   await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await step(page, 'Elevation');
-  await page.getByRole('radio', { name: /Fill short gaps and export/ }).check();
+  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
   const exported = await downloadRoute(page);
   expect(exported.route.elevationInfo?.containsFilledValues).toBe(true);
   expect(exported.route.elev!.at(-1)!.upDm).toBe(200);
 });
 
-test('rejects unknown endpoint elevation and supports a geometry-only export', async ({ page }) => {
-  await importText(page, gpx([[0, 0, null], [0, 0.0001, 110], [0, 0.0002, 120]]));
+test('fills endpoint elevation and warns about long gaps without blocking export', async ({ page }) => {
+  await importText(page, gpx([[0, 0, null], [0, 0.002, 110], [0, 0.004, null], [0, 0.006, 120]]));
   await confirmRoute(page);
   await step(page, 'Elevation');
-  await page.getByRole('radio', { name: /Fill short gaps and export/ }).check();
-  await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
-  await expect(page.getByRole('navigation').getByRole('button', { name: /Review/ })).toBeDisabled();
-  await page.getByRole('radio', { name: /Omit elevation/ }).check();
+  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+  await expect(page.locator('.issue[data-code="ELEVATION_LARGE_GAP"]')).toHaveCount(2);
+  await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled();
   const exported = await downloadRoute(page);
-  expect(exported.route.elev).toBeUndefined();
-  expect(exported.route.elevationInfo).toBeUndefined();
+  expect(exported.route.elev![0].hDm).toBe(1100);
+  expect(exported.route.elevationInfo?.containsFilledValues).toBe(true);
 });
 
 test('keeps KML altitude uncertainty explicit and records accepted provenance', async ({ page }) => {

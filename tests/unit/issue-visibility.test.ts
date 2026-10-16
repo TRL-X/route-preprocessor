@@ -27,6 +27,12 @@ describe('stage-specific user diagnostics', () => {
     expect(codes(issuesForStep([...imported, error('ELEVATION_UNCONFIRMED')], 'elevation', options))).toEqual(['ELEVATION_UNCONFIRMED']);
     expect(issuesForStep(imported, 'elevation', { ...options, acceptUncertainElevation: true })).toEqual([]);
   });
+  it('shows long elevation gap warnings without adding export blockers', () => {
+    const issues = [warning('ELEVATION_LARGE_GAP')];
+    expect(codes(issuesForStep(issues, 'elevation', { ...options, elevationMode: 'interpolate' }))).toEqual(['ELEVATION_LARGE_GAP']);
+    expect(issuesForStep(issues, 'elevation', { ...options, elevationMode: 'omit' })).toEqual([]);
+    expect(issuesForStep(issues, 'export', options)).toEqual([]);
+  });
   it('keeps unexpected blocking failures visible and puts invalid parameters on the editable step', () => {
     expect(codes(issuesForStep([error('processing'), error('FUTURE_ERROR')], 'stations', options))).toEqual(['processing', 'FUTURE_ERROR']);
     expect(codes(issuesForStep([error('OPTIONS_INVALID')], 'route', { ...options, geometryToleranceM: NaN }))).toEqual(['OPTIONS_INVALID']);
