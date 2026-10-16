@@ -21,6 +21,7 @@ async function expectWindowSizedEditor(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await page.route('https://tiles.openfreemap.org/**', route => route.abort());
+  await page.route('https://geomag.bgs.ac.uk/web_service/**', route => route.abort());
   await page.goto('/');
   await page.getByLabel('Choose route file', { exact: true }).setInputFiles(fileURLToPath(new URL('../fixtures/routes/2026MY/EMY20K.gpx', import.meta.url)));
   await expect(page.getByLabel('Route name', { exact: true })).toBeVisible();
@@ -67,13 +68,15 @@ test('editing stays inside the window when settings expand or the window is resi
     { width: 390, height: 844 }, { width: 390, height: 667 },
   ]) {
     await page.setViewportSize(viewport);
-    for (const details of [page.locator('.advanced')]) {
+    for (const details of await page.locator('.advanced').all()) {
       if (await details.getAttribute('open') === null) await details.locator('summary').click();
     }
     const body = page.locator('.panel-body');
-    await body.press('End');
-    const overflows = await body.evaluate(el => el.scrollHeight > el.clientHeight);
-    if (overflows) await expect.poll(() => body.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    // Resizing and async content can change overflow before keyboard scrolling settles.
+    await expect.poll(async () => {
+      await body.press('End');
+      return body.evaluate(el => el.scrollHeight <= el.clientHeight || el.scrollTop > 0);
+    }).toBe(true);
     await expectWindowSizedEditor(page);
     // Returning to the first field must scroll only its own pane.
     await page.getByLabel('Route name', { exact: true }).fill('A route name that is much longer than the available title space '.repeat(3));
