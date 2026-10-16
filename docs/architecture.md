@@ -20,7 +20,7 @@
 | `src/core/types.ts` | 源数据、参考里程、编辑站点和 RTE 数据的共享类型；字段名称标明单位。 |
 | `src/core/import.ts` | 纯 XML 导入与源文件预算检查，唯一第三方运行时算法依赖为 `fast-xml-parser`。 |
 | `src/core/process.ts` | 方向、连续重复点、里程、关联、几何、高程和阶段处理。 |
-| `src/core/cbor.ts`、`rte.ts` | 受限确定性 CBOR、RTE 编解码、严格验证、剖面查询。 |
+| `src/core/cbor.ts`、`rte.ts` | 受限确定性 CBOR、RTE 编解码、严格验证、剖面及磁偏角/航向查询。 |
 | `tests/unit` | 核心算法、格式向量与异常输入、草稿/修订号逻辑。 |
 | `tests/e2e` | Playwright 用户流程测试。 |
 | `tests/fixtures` | 回归样例及字节身份清单，不作为网页静态资源。 |
@@ -89,7 +89,7 @@ RTE/CBOR 使用 `RteError`，分类如下：
 | `invalid` | 文件布局、数据取值、CRC 或跨段语义不合法。 |
 | `unsupported` | 当前实现不能解释的主版本、schema、段版本或关键段。 |
 | `resource` | 超过当前读取器/编码器资源预算，不代表格式本身不允许。 |
-| `unavailable` | 请求高程查询时没有完整 `ELEV`。 |
+| `unavailable` | 请求高程查询时没有完整 `ELEV`，或磁偏角缺省/查询日期超出使用区间。 |
 | `range` | 剖面查询里程超出范围。 |
 
 Worker 对抛出的异常返回 `{ ok: false, error: message }`，当前不跨 Worker 传递 `RteError.code`；`ProcessingResult` 中的结构化 issues 则完整返回。取消由客户端使用 `AbortError` 表示。
@@ -100,13 +100,13 @@ RTE 当前预算为单文件 64 MiB、目录 256 项、GEOM/ELEV/GIDX 各 1,000,
 
 ## 外部资源与显示边界
 
-路线解析、计算和 RTE 生成在浏览器内完成。应用没有上传路线文件的业务 API。默认底图样式为 OpenFreeMap Liberty，可通过构建环境变量 `VITE_MAP_STYLE_URL` 替换；浏览器会请求第三方地图样式、瓦片或字体等资源。底图不可用时仍显示本地路线；这不等同于完整离线应用，项目没有预缓存网页资源的 Service Worker。
+路线解析、计算和 RTE 生成在浏览器内完成。应用没有上传路线文件的业务 API。默认磁偏角查询通过 `src/core/declination.ts` 将路线中点坐标及所选日期发送至 BGS WMM2025 服务，8 秒超时，失败保持元数据缺失；可选择手动录入或省略。App 取消过期请求并在完成前暂缓导出。默认底图样式为 OpenFreeMap Liberty，可通过构建环境变量 `VITE_MAP_STYLE_URL` 替换；浏览器会请求第三方地图样式、瓦片或字体等资源。底图不可用时仍显示本地路线；这不等同于完整离线应用，项目没有预缓存网页资源的 Service Worker。
 
 MapLibre 的显示世界副本、日期变更线展开和 Mercator 纬度限制只影响显示。原始/参考坐标和 RTE WGS84 E7 值不因此改变。剖面显示依赖计算结果，不能用显示抽稀数据重算累计升降。
 
 ## 规范、样例与维护
 
-`docs/TRL-X_Route_V1_Specification_ZH_EN.md` 是用户提供的草案规范副本，目前为格式 1.0 / 文档修订 0.2。格式变更、处理策略变更和 UI 变更分别记录，不能仅因实现方便改变规范字段含义。
+`docs/TRL-X_Route_V1_Specification_ZH_EN.md` 是用户提供的草案规范副本，目前为格式 1.0 / 文档修订 0.3。格式变更、处理策略变更和 UI 变更分别记录，不能仅因实现方便改变规范字段含义。
 
 8 份 `2026MY` GPX/KML 来自用户提供目录；[样例说明](../tests/fixtures/routes/2026MY/README.md)和 [manifest](../tests/fixtures/routes/2026MY/manifest.json)保存来源、大小、SHA-256 与原始观测。文件中的 `creator` 指向 ovitalmap，KML `author` 为空；在当前样例与规范文档中未发现明确许可证声明，这些元数据不作为许可授权的替代。应用运行时不引用这些文件，也不将它们复制到 `public` 或 `dist`。
 

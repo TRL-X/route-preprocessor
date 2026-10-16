@@ -1,3 +1,4 @@
+import { validateMagneticDeclination } from './rte';
 import { cleanLabel } from './import';
 import type { DraftStation, ElevNode, GeomNode, MatchCandidate, ProcessingIssue, ProcessingOptions, ProcessingResult, ReferencePoint, ReferenceRoute, RouteIdentity, SourceLandmark, SourcePoint, SourceRoute, Stage, StationEvent } from './types';
 
@@ -343,6 +344,10 @@ function textIssue(value: string, maxBytes: number): boolean {
 
 export function processRoute(reference: ReferenceRoute, stations: DraftStation[], options: ProcessingOptions, identity: RouteIdentity): ProcessingResult {
   const issues: ProcessingIssue[] = [...reference.issues];
+  if (identity.magneticDeclination !== undefined) {
+    try { validateMagneticDeclination(identity.magneticDeclination); }
+    catch { issues.push(issue('MAGNETIC_DECLINATION_INVALID')); }
+  }
   if (identity.routeId.length !== 16 || !identity.routeId.some(Boolean) || !Number.isInteger(identity.revision) || identity.revision < 1 || identity.revision > UINT32_MAX) issues.push(issue('IDENTITY_INVALID'));
   if (textIssue(identity.name, 96)) issues.push(issue('ROUTE_NAME_INVALID'));
   if (identity.inputSha256 && identity.inputSha256.length !== 32) issues.push(issue('SOURCE_HASH_INVALID'));
@@ -390,6 +395,7 @@ export function processRoute(reference: ReferenceRoute, stations: DraftStation[]
   return { route: {
     routeId: identity.routeId.slice(), revision: identity.revision, name: identity.name, routeKind: reference.isClosed ? 1 : 0,
     totalSDm: totalDm, geom, stations: events, stages,
+    ...(identity.magneticDeclination ? { magneticDeclination: { ...identity.magneticDeclination } } : {}),
     ...(profile ? { elev: profile.nodes, elevationInfo: { source: 1 as const, verticalDatum: reference.elevationDatum, quality: 1 as const, sourceDetail: reference.elevationUncertain ? 'User-accepted source altitude; vertical datum unknown' : 'Source file elevation', containsFilledValues: profile.filled } } : {}),
     preprocessing: { tool: 'TRL-X Route Studio', toolVersion: '0.1.0', recipeId: `browser-v1-${options.elevationMode}`, ...(identity.inputSha256 ? { inputSha256: identity.inputSha256.slice() } : {}), parameters: { geometryToleranceDm: quantize(options.geometryToleranceM * 10), ...(profile ? { elevationGridDm: quantize(options.elevationIntervalM * 10), elevationSmoothingWindowDm: quantize(options.smoothingWindowM * 10) } : {}) } },
   }, issues };

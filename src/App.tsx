@@ -9,17 +9,21 @@ import { flowMachine, STEPS, type Step } from './app/flow';
 import { workerTask } from './app/worker-client';
 import { loadDraft, saveDraft, reserveExportRevision, RevisionExhaustedError } from './app/drafts';
 import { positionAt } from './core/process';
-import type { DraftStation, ImportedFile, ProcessingIssue, ProcessingOptions, ProcessingResult, ReferenceRoute, RouteData } from './core/types';
+import { fetchRouteDeclination, utcToday } from './core/declination';
+import type { DraftStation, MagneticDeclinationInfo, ImportedFile, ProcessingIssue, ProcessingOptions, ProcessingResult, ReferenceRoute, RouteData } from './core/types';
 import ElevationChart from './components/ElevationChart';
 import ImportLanding from './features/import/ImportLanding';
 import IssuesList from './features/review/IssuesList';
 import { issueStage, issuesForStep } from './features/review/issue-visibility';
 import StageList from './features/review/StageList';
+import MagneticDeclinationFields from './components/MagneticDeclinationFields';
 
 const RouteMap = lazy(() => import('./components/RouteMap'));
 type Editor = {
   file: ImportedFile; reference: ReferenceRoute; stations: DraftStation[];
   options: ProcessingOptions; name: string; routeId: Uint8Array; inputSha256: Uint8Array;
+  magneticDeclination?: MagneticDeclinationInfo;
+  declinationMode?: 'auto' | 'manual' | 'omit'; declinationQueryDate?: string;
   sourceIndex: number; reverse: boolean; startIndex: number;
 };
 type Ledger = Record<string, { revision: number; hash: string }>;
@@ -68,8 +72,14 @@ export default function App() {
   const [exported, setExported] = useState<{ filename: string; bytes: number; revision: number; routeId: string } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const fileBusy = useRef(false);
+  const [declinationLookup, setDeclinationLookup] = useState<{ reference: ReferenceRoute; date: string; status: 'loading' | 'available' | 'unavailable' } | null>(null);
+  const [declinationRetry, setDeclinationRetry] = useState(0);
+  const declinationMode = editor?.declinationMode ?? (editor?.magneticDeclination ? 'manual' : 'omit');
+  const declinationDate = editor?.declinationQueryDate ?? '';
+  const declinationStatus = declinationMode === 'auto'
+    ? (declinationLookup?.reference === editor?.reference && declinationLookup?.date === declinationDate ? declinationLookup.status : 'loading') : null;
   const route = result?.route ?? null;
-  const ready = !!route && !processing && processedEditor.current === editor && !busy && confirmedRoute;
+  const ready = declinationStatus !== 'loading' && !!route && !processing && processedEditor.current === editor && !busy && confirmedRoute;
   const sortedStations = editor ? [...editor.stations].sort((a, b) => a.s - b.s || a.id - b.id) : [];
   const selected = editor?.stations.find(s => s.id === selectedStationId);
   const unresolved = editor?.stations.filter(s => !s.confirmed).length ?? 0;
@@ -116,7 +126,7 @@ export default function App() {
     let active = true;
     let cancel: (() => void) | undefined;
     const timer = setTimeout(() => {
-      const job = workerTask<ProcessingResult>({ type: 'process', reference: editor.reference, stations: editor.stations, options: editor.options, identity: { routeId: editor.routeId, revision: currentRevision, name: editor.name, inputSha256: editor.inputSha256 } });
+      const job = workerTask<ProcessingResult>({ type: 'process', reference: editor.reference, stations: editor.stations, options: editor.options, identity: { routeId: editor.routeId, revision: currentRevision, name: editor.name, inputSha256: editor.inputSha256, magneticDeclination: editor.magneticDeclination } });
       cancel = job.cancel;
       job.promise.then(value => { if (active) { setResult(value); processedEditor.current = editor; setProcessing(false); } }).catch(e => {
         if (active && !aborted(e)) { setResult({ route: null, issues: [{ code: 'processing', severity: 'error', message: errorText(e) }] }); setProcessing(false); }
@@ -124,6 +134,20 @@ export default function App() {
     }, 120);
     return () => { active = false; clearTimeout(timer); cancel?.(); };
   }, [editor, currentRevision]);
+  useEffect(() => {
+    if (!editor || declinationMode !== 'auto') { setDeclinationLookup(null); return; }
+    const reference = editor.reference;
+    const controller = new AbortController();
+    setDeclinationLookup({ reference, date: declinationDate, status: 'loading' });
+    setEditor(previous => previous?.reference === reference ? { ...previous, magneticDeclination: undefined } : previous);
+    void fetchRouteDeclination(reference, declinationDate, controller.signal).then(value => {
+      if (controller.signal.aborted) return;
+      setEditor(previous => previous?.reference === reference && previous.declinationMode === 'auto' && previous.declinationQueryDate === declinationDate
+        ? { ...previous, magneticDeclination: value } : previous);
+      setDeclinationLookup({ reference, date: declinationDate, status: value ? 'available' : 'unavailable' });
+    });
+    return () => controller.abort();
+  }, [editor?.reference, declinationMode, declinationDate, declinationRetry]);
   useEffect(() => { setExported(null); }, [editor]);
   useEffect(() => {
     setCursorS(previous => previous === null || !editor ? null : Math.min(editor.reference.totalM, Math.max(0, previous)));
@@ -148,7 +172,7 @@ export default function App() {
     if (!previous || fileBusy.current) return;
     setHistory(history => [...history.slice(-24), previous]);
     const next = update(previous);
-    if (next.name !== previous.name || next.reference !== previous.reference || next.options.geometryToleranceM !== previous.options.geometryToleranceM) {
+    if (next.name !== previous.name || next.reference !== previous.reference || next.magneticDeclination !== previous.magneticDeclination || next.declinationMode !== previous.declinationMode || next.declinationQueryDate !== previous.declinationQueryDate || next.options.geometryToleranceM !== previous.options.geometryToleranceM) {
       setConfirmedRoute(false); setUnlockedStep(1);
     } else if (next.stations !== previous.stations) {
       setUnlockedStep(value => Math.min(value, 2));
@@ -178,7 +202,7 @@ export default function App() {
       cancelTask.current = job.cancel;
       const data = await job.promise;
       const complete = data.reference.points.every(p => p.elevation !== null) && !data.reference.elevationUncertain;
-      setEditor({ ...data, options: { ...DEFAULT_OPTIONS, elevationMode: complete ? 'source' : 'omit' }, name: data.file.routes[0].name || file.name.replace(/\.(gpx|kml)$/i, ''), routeId: crypto.getRandomValues(new Uint8Array(16)), inputSha256: hash, sourceIndex: 0, reverse: false, startIndex: 0 });
+      setEditor({ ...data, declinationMode: 'auto', declinationQueryDate: utcToday(), options: { ...DEFAULT_OPTIONS, elevationMode: complete ? 'source' : 'omit' }, name: data.file.routes[0].name || file.name.replace(/\.(gpx|kml)$/i, ''), routeId: crypto.getRandomValues(new Uint8Array(16)), inputSha256: hash, sourceIndex: 0, reverse: false, startIndex: 0 });
       setHistory([]); setDraft(null); setCursorS(0); setSelectedStationId(null); setConfirmedRoute(false); setUnlockedStep(1); setExported(null);
       send({ type: 'ROUTE' });
     } catch (e) { if (!aborted(e)) setError(errorText(e)); }
@@ -259,7 +283,7 @@ export default function App() {
   }
   function exportReport() {
     if (!editor) return;
-    const report = { name: editor.name, source: editor.file.fileName, routeId: exported?.routeId ?? hex(editor.routeId), revision: exported?.revision ?? currentRevision, parameters: editor.options, totalDistanceM: totalM, reportLanguage: language, issues: [...issues, ...importIssues].map(issue => ({ ...issue, message: message(issue) })), stationCount: editor.stations.length, inputSha256: hex(editor.inputSha256) };
+    const report = { name: editor.name, source: editor.file.fileName, routeId: exported?.routeId ?? hex(editor.routeId), revision: exported?.revision ?? currentRevision, parameters: editor.options, magneticDeclination: editor.magneticDeclination, totalDistanceM: totalM, reportLanguage: language, issues: [...issues, ...importIssues].map(issue => ({ ...issue, message: message(issue) })), stationCount: editor.stations.length, inputSha256: hex(editor.inputSha256) };
     download(new TextEncoder().encode(JSON.stringify(report, null, 2)), 'route-quality-report.json', 'application/json');
   }
   const handleFile = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void importFile(file); event.target.value = ''; };
@@ -311,6 +335,12 @@ export default function App() {
               <div className="section-label">{t('app.travelDirection')}</div><div className="direction-card"><Flag size={18} /><span>{editor.reverse ? t('app.reversedFromSource') : t('app.asRecordedInSource')}<small>{km(totalM)} km · {editor.reference.isClosed ? t('app.closedLoop') : t('app.openRoute')}</small></span><button className="icon-button" aria-label={t('app.reverseRoute')} onClick={() => confirmRebuild(editor.sourceIndex,!editor.reverse,editor.startIndex)}><RotateCcw size={19} /></button></div>
               {editor.reference.isClosed && <button className="button button-secondary full-width" disabled={cursorS === null} onClick={() => { const point=editor.reference.points.reduce((a,b)=>Math.abs(a.s-(cursorS??0))<Math.abs(b.s-(cursorS??0))?a:b); confirmRebuild(editor.sourceIndex,editor.reverse,point.sourceIndex??0); }}><Flag size={16} />{t('app.setCursorPositionAsStart')}</button>}
               <details className="advanced"><summary><SlidersHorizontal size={15}/>{t('app.geometrySettings')}<ChevronDown size={14}/></summary><label className="field"><span>{t('app.simplificationToleranceM')}</span><input type="number" min="0" max="50" step="0.5" value={editor.options.geometryToleranceM} onChange={e=>editOptions({geometryToleranceM:Number(e.target.value)})}/><small>{t('app.referenceDistancesStayUnchanged')}</small></label></details>
+              <MagneticDeclinationFields value={editor.magneticDeclination} reference={editor.reference.points[0]}
+                mode={declinationMode} queryDate={declinationDate} status={declinationStatus}
+                onModeChange={mode => edit(e => ({ ...e, declinationMode: mode, declinationQueryDate: e.declinationQueryDate || utcToday(), magneticDeclination: mode === 'manual' ? e.magneticDeclination : undefined }))}
+                onDateChange={date => edit(e => ({ ...e, declinationQueryDate: date, magneticDeclination: undefined }))}
+                onRetry={() => setDeclinationRetry(n => n + 1)}
+                onChange={value => edit(e => ({ ...e, magneticDeclination: value }))} />
             </>}
             {step === 'stations' && <>
               <div className="section-toolbar"><span>{t('app.alongRouteCount', { count: sortedStations.length })}</span><button className="button button-small" onClick={addStation}><Plus size={15}/>{t('app.add')}</button></div>
@@ -342,7 +372,7 @@ export default function App() {
               <button className="button button-secondary full-width" onClick={exportReport}><ArrowDownToLine size={16}/>{t('app.downloadQualityReport')}</button>
             </>}
             {step === 'export' && <>
-              <div className={'export-status '+(ready?'valid':'')}><span>{ready?<ShieldCheck size={30}/>:<TriangleAlert size={30}/>}</span><h3>{ready?t('app.readyForTheTrail'):t('app.aFewDetailsToResolve')}</h3><p>{ready?t('app.yourRouteIsReadyForFinalEncodingAnd'):t(processing ? 'app.waitForProcessing' : !confirmedRoute ? 'app.routeConfirmationRequired' : 'app.resolveTheIssuesBelowBeforeDownloadingYourRoute')}</p></div>
+              <div className={'export-status '+(ready?'valid':'')}><span>{ready?<ShieldCheck size={30}/>:<TriangleAlert size={30}/>}</span><h3>{ready?t('app.readyForTheTrail'):t('app.aFewDetailsToResolve')}</h3><p>{ready?t('app.yourRouteIsReadyForFinalEncodingAnd'):t(declinationStatus === 'loading' ? 'app.declinationLoading' : processing ? 'app.waitForProcessing' : !confirmedRoute ? 'app.routeConfirmationRequired' : 'app.resolveTheIssuesBelowBeforeDownloadingYourRoute')}</p></div>
               {!confirmedRoute&&<button className="button button-secondary full-width" onClick={()=>go('route')}>{t('app.confirmRouteAndDirectionFirst')}<ArrowRight size={15}/></button>}<dl className="export-details"><div><dt>{t('app.format')}</dt><dd>TRL-X Route 1.0</dd></div><div><dt>{t('app.revision')}</dt><dd>{currentRevision}</dd></div><div><dt>{t('app.geometryNodes')}</dt><dd>{route ? number(route.geom.length) : '—'}</dd></div><div><dt>{t('app.elevationNodes')}</dt><dd>{route?.elev ? number(route.elev.length) : t('app.notIncluded')}</dd></div><div><dt>{t('app.estimatedSize')}</dt><dd>{route?'~ '+size(estimateBytes):'—'}</dd></div></dl>
               <button className="button button-primary full-width export-button" disabled={!ready} onClick={()=>void exportRoute()}><ArrowDownToLine size={18}/>{t('app.downloadRte')}</button>
               {exported&&<div className="success-card"><CheckCircle2 size={20}/><span><strong>{exported.filename}</strong><small>{t('app.exportDetails', { size: size(exported.bytes), revision: number(exported.revision) })}</small></span></div>}

@@ -5,14 +5,14 @@
 |---|---|
 | 文档标识 / Document ID | `TRL-X-ROUTE-SPEC` |
 | 格式版本 / Format version | **1.0** |
-| 文档修订 / Document revision | **0.2** |
+| 文档修订 / Document revision | **0.3** |
 | 状态 / Status | **Draft / 草案** |
-| 日期 / Date | 2026-10-15 |
+| 日期 / Date | 2026-10-16 |
 | 推荐扩展名 / Recommended extension | `.rte` |
 
-本文定义 TRL-X Route 的二进制布局、数据语义及验证要求，与硬件、操作系统、文件系统和传输协议无关。本文仍为草案。
+本文定义 TRL-X Route 的数据模型、二进制布局、导航参考数据、查询语义及验证和扩展规则。
 
-This document specifies the binary layout, data semantics, and validation requirements of TRL-X Route, independently of hardware, operating system, filesystem, or transport. This document remains a draft.
+This document specifies the data model, binary layout, navigation reference data, query semantics, and validation and extension rules of TRL-X Route.
 
 中英文共享字段表、公式和 CDDL；如有歧义，以英文规范性文字及共享定义为准。除注明为资料性的内容外，正文和附录均为规范性内容。`MUST`、`MUST NOT`、`SHOULD`、`SHOULD NOT`、`MAY` 分别对应“必须”“不得”“应”“不应”“可以”，按 BCP 14 解释。[R1] [R2]
 
@@ -31,14 +31,14 @@ The Chinese and English text share field tables, equations, and CDDL. In case of
 9. [完整性 / Integrity](#integrity)
 10. [符合性与扩展 / Conformance and extensions](#conformance)
 
-[A. META CDDL](#cddl) · [B. 参考向量 / Reference vectors](#vectors) · [规范性引用 / Normative references](#references)
+[A. META CDDL](#cddl) · [B. 参考向量 / Reference vectors](#vectors) · [引用 / References](#references)
 
 <a id="model"></a>
 ## 1. 数据模型 / Data model
 
-每个文件表示一条连续、有向路线的不可变版本，包含平面几何、有序站点事件和几何索引，可以包含全程高程剖面及累计上升、下降。V1 不定义不连续轨迹、未知高程缺口、压缩或加密数据段；源数据解析、预处理算法、显示、实时状态、传输、存储发布及签名机制不在本规范范围内。
+每个文件表示一条连续、有向路线的不可变版本，包含平面几何、有序站点事件和几何索引，可以包含全程高程剖面、累计上升与下降，以及用于磁北与真北航向转换的磁偏角参考数据。各类沿线数据共用同一基准里程轴。
 
-Each file represents an immutable version of one continuous, directed route. It contains planimetric geometry, ordered station events, and a geometry index, and MAY contain a complete elevation profile with cumulative ascent and descent. V1 does not define discontinuous tracks, unknown elevation gaps, or compressed or encrypted sections. Source parsing, preprocessing algorithms, presentation, live state, transport, storage publication, and signature mechanisms are outside its scope.
+Each file represents an immutable version of one continuous, directed route. It contains planimetric geometry, ordered station events, and a geometry index, and MAY contain a complete elevation profile, cumulative ascent and descent, and magnetic declination reference data for magnetic-to-true heading conversion. All along-route data share one reference distance axis.
 
 | 术语 / Term | 定义 / Definition |
 |---|---|
@@ -66,6 +66,7 @@ The producer MUST establish the distance axis before planimetric simplification 
 | 索引、偏移 / Indices and offsets | 索引从 0 开始；偏移和长度以字节计；数据段偏移相对文件起点。 / Indices are zero-based; offsets and lengths are in bytes; section offsets are file-relative. |
 | `_e7` | 十进制度乘 `10^7`。 / Decimal degrees multiplied by `10^7`. |
 | `_dm` | 分米；`1 dm = 0.1 m`。 / Decimeters; `1 dm = 0.1 m`. |
+| `_cdeg` | 百分之一度；`1 cdeg = 0.01°`。 / Centidegrees; `1 cdeg = 0.01°`. |
 
 量化必须舍入到最接近整数，半值远离零；超出字段范围必须拒绝，不得截断、回绕或饱和。经度在量化前归一到 `[-180,180)`；若量化得到 `+1800000000`，必须改为 `-1800000000`。量化后的节点里程必须严格递增；重复里程须由生成器消解。
 
@@ -161,9 +162,9 @@ Section types MUST be unique within a file. Record sections MUST have two positi
 
 The first and last distances MUST be 0 and `S`, with strictly increasing intermediate distances. Adjacent records define ordered segments and MUST have distinct coordinates; nonadjacent vertices may coincide. Traversal order MUST be preserved without coordinate sorting or global deduplication. No implicit last-to-first edge exists; closure requires an explicit final node.
 
-在线段 `i` 上获得正向比例 `0 ≤ t ≤ 1` 时，沿线位置为下式；定位匹配和投影算法不由本规范规定。
+在线段 `i` 上获得正向比例 `0 ≤ t ≤ 1` 时，沿线位置由下式确定。
 
-For a forward fraction `0 ≤ t ≤ 1` on segment `i`, along-route position is defined below. Matching and projection algorithms are not specified here.
+For a forward fraction `0 ≤ t ≤ 1` on segment `i`, along-route position is defined below.
 
 ```text
 s = s[i] + t * (s[i+1] - s[i])
@@ -252,6 +253,7 @@ Fields are required unless marked optional or conditional; this convention also 
 | 6 | `preprocessing` | map | 生成来源信息 / Production provenance |
 | 7 | `stations` | array, 2–4096 | 有序站点事件 / Ordered station events |
 | 8 | `stages` | optional array, 1–4095 | 完整阶段缓存 / Complete stage cache |
+| 128 | `magnetic_declination` | optional map | 路线磁偏角参考值，见 7.7。 / Route magnetic declination reference; see 7.7. |
 
 ### 7.3 高程信息 / Elevation metadata
 
@@ -322,12 +324,47 @@ Events are sorted numerically by `(s_dm, event_id)`. Exactly one start and one f
 
 `stages` MAY be omitted entirely. If present, it MUST cover all consecutive boundary pairs in order, with count equal to boundary count minus one; partial caches are prohibited. With `ELEV`, keys 2 and 3 MUST both be present and equal the exact minimum and maximum `ELEV.h_dm` in the closed interval; otherwise both MUST be absent. Stage distance, ascent, and descent are derived from boundary distances and profile queries, without separately defined duplicate fields.
 
+### 7.7 磁偏角 / Magnetic declination
+
+根 map 的键 `128` 为可选、非关键扩展。该对象保存生成器为整条路线选定的常数磁偏角参考值及其参考位置、日期和来源；可以独立于 `ELEV` 存在。生成器应评估该常数在路线范围及计划使用日期的适用性。
+
+Root key `128` is an optional, noncritical extension. It stores a constant declination reference selected for the route, with its reference location, date, and source; it MAY be present independently of `ELEV`. The producer SHOULD assess the constant's suitability over the route extent and intended dates of use.
+
+| Key | Field | Type / Limit | 定义 / Definition |
+|---:|---|---|---|
+| 0 | `declination_cdeg` | integer, `-18000..18000` | 磁偏角，东偏为正、西偏为负。 / Declination, positive east and negative west. |
+| 1 | `reference_lat_e7` | `i32`, latitude range | 参考点的 WGS84 纬度。 / WGS84 reference latitude. |
+| 2 | `reference_lon_e7` | `i32`, longitude range | 参考点的 WGS84 经度。 / WGS84 reference longitude. |
+| 3 | `reference_date` | date text, 10 bytes | 该数值对应的日期。 / Date for which the value was evaluated or observed. |
+| 4 | `source` | text, 1–64 bytes | 模型及版本或观测来源标识，例如 `WMM2025`。 / Model and version or observation source identifier, e.g. `WMM2025`.[R6] |
+| 5 | `reference_height_dm` | optional `i32` | 参考点的 WGS84 椭球高；缺省表示未记录。 / Reference height above the WGS84 ellipsoid; omission means unrecorded. |
+| 6 | `valid_from` | optional date text, 10 bytes | 生成器声明的使用起始日期，含当日。 / Producer-declared first applicable date, inclusive. |
+| 7 | `valid_until` | optional date text, 10 bytes | 生成器声明的使用截止日期，含当日。 / Producer-declared last applicable date, inclusive. |
+
+日期采用 UTC 日历日期 `YYYY-MM-DD`，必须是公历中有效的日期，年份为 `0001..9999`。`reference_date` 是数值的参考日期。键 6、7 必须同时存在或同时省略；存在时必须满足 `valid_from ≤ reference_date ≤ valid_until`。日期比较按实际日历顺序进行。参考坐标使用 `GEOM` 的范围；参考高度明确采用 WGS84 椭球基准。
+
+Dates use UTC calendar dates `YYYY-MM-DD` and MUST be valid Gregorian dates with years `0001..9999`. `reference_date` is the value's evaluation date. Keys 6 and 7 MUST appear together or both be omitted; when present, `valid_from ≤ reference_date ≤ valid_until` MUST hold. Dates are compared chronologically. Reference coordinates use the `GEOM` ranges; reference height explicitly uses the WGS84 ellipsoid.
+
+磁偏角定义为磁北相对于真北的有符号水平夹角。[R5] 航向从各自北向顺时针增加；以下运算全部使用 cdeg，并将结果归一到 `[0,36000)`：
+
+Declination is the signed horizontal angle of magnetic north relative to true north.[R5] Headings increase clockwise from their respective north references. All operations below use cdeg and normalize the result to `[0,36000)`:
+
+```text
+wrap36000(x) = x - 36000 * floor(x / 36000)
+true_heading_cdeg     = wrap36000(magnetic_heading_cdeg + declination_cdeg)
+magnetic_heading_cdeg = wrap36000(true_heading_cdeg     - declination_cdeg)
+```
+
+修正应用于磁北参考的航向；已是真北参考的航向直接使用。路线坐标及基准里程保持原有含义。查询使用存储的常数值。对象缺省时，磁偏角查询返回 `unavailable`；数值 `0` 表示有效的零磁偏角。声明了使用日期区间时，区间外查询返回 `unavailable`；未声明区间时，日期适用性为 `unspecified`。参考日期、来源和编码精度用于解释数值，其适用性须结合位置和使用日期判断。[R5]
+
+The correction applies to magnetic-referenced headings; true-referenced headings are used directly. Route coordinates and reference distances retain their meanings. Queries use the stored constant. When the object is absent, declination queries return `unavailable`; a value of `0` is a valid zero declination. If an applicability interval is declared, queries outside it return `unavailable`; if omitted, temporal applicability is `unspecified`. The reference date, source, and encoding resolution describe the value; suitability is assessed for the location and date of use.[R5]
+
 <a id="gidx"></a>
 ## 8. 几何索引 / Geometry index — `GIDX`
 
-每条记录 32 字节，描述 `GEOM` 中的连续线段块；不是存储介质块。
+每条记录 32 字节，描述 `GEOM` 中的连续线段块。
 
-Each 32-byte record describes a block of consecutive `GEOM` segments, not a storage-media block.
+Each 32-byte record describes a block of consecutive `GEOM` segments.
 
 | Offset | Field | Type |
 |---:|---|---|
@@ -352,9 +389,9 @@ next.first_node = previous.first_node + previous.node_count - 1
 
 Latitude bounds MUST equal the minimum and maximum quantized vertex values in the block. Longitude normally follows the same rule. If any adjacent longitude difference has magnitude greater than `1800000000`, longitude bounds MUST instead be `[-1800000000,+1800000000]`. The positive endpoint is permitted only as an index bound, not as `GEOM.lon_e7`.
 
-索引描述存储顶点的包围范围，不规定跨投影的精确曲线边界。使用索引筛选时，应考虑经度环绕、搜索余量及选用的线段插值模型。
+索引描述存储顶点的包围范围。使用索引筛选时，应考虑经度环绕、搜索余量及选用的线段插值模型。
 
-The index bounds stored vertices; it does not specify exact curve bounds across projections. Filtering SHOULD account for longitude wrapping, search margins, and the selected segment interpolation model.
+The index bounds stored vertices. Filtering SHOULD account for longitude wrapping, search margins, and the selected segment interpolation model.
 
 <a id="integrity"></a>
 ## 9. 完整性 / Integrity
@@ -375,9 +412,9 @@ CRC 覆盖按文件顺序排列的全部 `[0,file_size)` 字节，包括目录�
 
 The CRC covers every byte in `[0,file_size)` in file order, including the directory, unknown sections, and padding, except that bytes `[44,48)` are treated as zero during calculation. Store the result as little-endian `u32` at offset 44. Validation MUST also confirm actual length equals `file_size`. A fixed-residue check including the stored CRC MUST NOT replace this procedure.
 
-CRC 不提供认证、保密、防篡改或防回滚；它不能替代结构和语义验证，也不能证明相同 CRC 的文件字节相同。
+CRC 用于检测文件字节的意外损坏。读取器必须同时执行第 10 节的结构和语义验证。
 
-CRC provides no authentication, confidentiality, tamper resistance, or rollback protection. It does not replace structural or semantic validation or establish byte equality between files with equal CRCs.
+The CRC detects accidental corruption of file bytes. Readers MUST also perform the structural and semantic validation in Section 10.
 
 <a id="conformance"></a>
 ## 10. 符合性与扩展 / Conformance and extensions
@@ -392,15 +429,19 @@ A producer MUST satisfy all encoding and semantic requirements. A full V1 reader
 |---|---|
 | 容器 / Container | 标识、版本、固定值、身份、长度、唯一段类型、关键标志、布局、零填充、精确 EOF、记录大小和数量。 / Magic, versions, fixed values, identity, lengths, unique types, critical flags, layout, zero padding, exact EOF, record sizes and counts. |
 | 完整性 / Integrity | 第 9 节的全文件 CRC。 / Whole-file CRC as in Section 9. |
-| 元数据 / Metadata | CBOR 编码配置、类型、范围、文本和 CDDL。 / CBOR profile, types, ranges, text, and CDDL. |
+| 元数据 / Metadata | CBOR 编码配置、类型、范围、文本和 CDDL；对已识别的磁偏角对象验证参考日期和使用区间。 / CBOR profile, types, ranges, text, and CDDL; reference dates and applicability interval for a recognized declination object. |
 | 数据 / Data | 坐标范围、里程单调性与端点、高程累计等式。 / Coordinate ranges, distance ordering and endpoints, cumulative-elevation equations. |
 | 关联 / Relationships | 站点排序和边界节点、阶段缓存、ELEV 与元数据存在关系、GIDX 覆盖及包围框。 / Station order and boundary nodes, stage cache, ELEV/metadata presence, GIDX coverage and bounds. |
 
-所有输入均须视为不可信。偏移、长度、乘积、索引及高度差必须以无溢出方式检查；不得依赖主机结构体布局或未对齐访问。读取器必须对分配、数量及 CBOR 嵌套设置资源边界，可以拒绝超过其公布限额的有效文件，但必须区分资源不足、不支持的格式与非法文件；不得静默截断或部分接受。资源限额及其协商不由本规范统一规定。
+所有输入均须视为不可信。偏移、长度、乘积、索引及高度差必须以无溢出方式检查；不得依赖主机结构体布局或未对齐访问。读取器必须对分配、数量及 CBOR 嵌套设置资源边界，可以拒绝超过其公布限额的有效文件，但必须区分资源不足、不支持的格式与非法文件；不得静默截断或部分接受。
 
-All input MUST be treated as untrusted. Offsets, lengths, products, indices, and height differences MUST be checked without overflow; host struct layouts and unaligned accesses MUST NOT be assumed. Readers MUST bound allocations, counts, and CBOR nesting, and MAY reject valid files exceeding published limits. Resource limits, unsupported formats, and invalid files MUST be distinguished; silent truncation or partial acceptance is prohibited. This specification does not standardize resource budgets or their negotiation.
+All input MUST be treated as untrusted. Offsets, lengths, products, indices, and height differences MUST be checked without overflow; host struct layouts and unaligned accesses MUST NOT be assumed. Readers MUST bound allocations, counts, and CBOR nesting, and MAY reject valid files exceeding published limits. Resource limits, unsupported formats, and invalid files MUST be distinguished; silent truncation or partial acceptance is prohibited.
 
 ### 10.2 版本与扩展处理 / Version and extension handling
+
+`META` 根键 `128` 的磁偏角对象遵循可忽略扩展规则，保留格式 1.0 和 META schema 1。识别该对象的读取器必须按 7.7 验证并解释；其他读取器按未知扩展处理。
+
+The declination object at `META` root key `128` follows the ignorable-extension rule, retaining format 1.0 and META schema 1. Readers recognizing the object MUST validate and interpret it under 7.7; other readers handle it as an unknown extension.
 
 | 情况 / Case | 要求 / Requirement |
 |---|---|
@@ -410,7 +451,7 @@ All input MUST be treated as untrusted. Offsets, lengths, products, indices, and
 | 未知关键段，或无法解释其版本 / Unknown critical section or unsupported critical version | 必须拒绝。 / MUST reject. |
 | `META.schema_version != 1` | 必须拒绝。 / MUST reject. |
 | 已定义 map 中未知键 `0..127` / Unknown low key in a defined map | 必须拒绝。 / MUST reject. |
-| 扩展键 `128..65535` / Extension key | 编码和资源验证后忽略未知值。 / Ignore unknown values after encoding and resource checks. |
+| 扩展键 `128..65535` / Extension key | 编码和资源验证后忽略未知值；根键 128 的含义见 7.7。 / Ignore unknown values after encoding and resource checks; root key 128 is defined in 7.7. |
 
 major 1 内，文件头大小、目录偏移、目录项大小、全局 flags 和 reserved 规则保持不变。minor 不得改变已定义的单位、字段布局或语义；本规范定义的段版本及 META schema 均为 1。未定义的 flag 位必须拒绝。非关键扩展必须可安全忽略，不得改变已定义数据的解释；新增必需语义必须使用关键扩展或显式版本变更。
 
@@ -436,7 +477,8 @@ route-meta = {
   6: preprocessing-info,
   7: [2*4096 station],
   ? 8: [1*4095 stage],
-  * extension-key => extension-value
+  ? 128: magnetic-declination-info,
+  * root-extension-key => extension-value
 }
 
 elevation-info = {
@@ -446,6 +488,17 @@ elevation-info = {
   ? 3: detail-text,                          ; source_detail
   ? 4: short-text,                           ; datum_name
   ? 5: bool,                                ; contains_filled_values
+  * extension-key => extension-value
+}
+
+magnetic-declination-info = {
+  0: -18000..18000,                         ; declination_cdeg
+  1: latitude-e7,                           ; reference_lat_e7
+  2: longitude-e7,                          ; reference_lon_e7
+  3: date-text,                             ; reference_date
+  4: short-text,                            ; source
+  ? 5: i32,                                 ; reference_height_dm
+  ? (6: date-text, 7: date-text),            ; valid_from, valid_until
   * extension-key => extension-value
 }
 
@@ -495,6 +548,8 @@ label-text = tstr .size (1..16)
 short-text = tstr .size (1..64)
 version-text = tstr .size (1..32)
 detail-text = tstr .size (1..128)
+date-text = tstr .size 10                 ; YYYY-MM-DD; calendar rules in 7.7
+root-extension-key = 129..65535
 extension-key = 128..65535
 
 ; Extension data is nonessential and MUST be safe to ignore.
@@ -509,18 +564,19 @@ extension-value = i32 / u32 / bool / null
 <a id="vectors"></a>
 ## 附录 B / Appendix B — 参考向量 / Reference vectors
 
-以下为完整合成文件。转储左栏为十六进制偏移，不属于文件数据；依次拼接右栏字节即可重建文件。所有查询数值以 dm 表示。
+以下为完整合成文件。转储左栏为十六进制偏移，不属于文件数据；依次拼接右栏字节即可重建文件。高程与距离查询使用 dm，航向查询使用 cdeg。
 
-These are complete synthetic files. The left column is a hexadecimal offset, not file data; concatenating the byte columns reconstructs each file. Query values below are in dm.
+These are complete synthetic files. The left column is a hexadecimal offset, not file data; concatenating the byte columns reconstructs each file. Elevation and distance queries use dm; heading queries use cdeg.
 
 | Vector | 内容 / Content | Size | Stored CRC32 | Revision |
 |---|---|---:|---|---:|
 | A | 含高程和阶段缓存 / With elevation and stage cache | 456 | `0xEE9C88FB` | 1 |
 | B | 与 A 相同的几何和站点，不含 ELEV 及 META 键 5、8。 / Same geometry and stations as A; omits ELEV and META keys 5 and 8. | 332 | `0x55BBCE5C` | 2 |
+| C | B 的数据加磁偏角元数据。 / B's data with declination metadata. | 396 | `0xDAE2BB11` | 3 |
 
-两者 `route_id` 均为 `01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10`，`S=20000`。A 的 `ELEV` 如下；B 的高程查询应报告不可用，而不是返回零。
+三个向量的 `route_id` 均为 `01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10`，`S=20000`。A 的 `ELEV` 如下；B 的高程查询应报告不可用，而不是返回零。
 
-Both use route ID `01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10` and `S=20000`. A's `ELEV` is shown below. B's elevation queries report unavailable, not zero.
+All three use route ID `01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10` and `S=20000`. A's `ELEV` is shown below. B's elevation queries report unavailable, not zero.
 
 | `s_dm` | `h_dm` | `up_dm` | `down_dm` |
 |---:|---:|---:|---:|
@@ -597,8 +653,64 @@ Both use route ID `01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10` and `S=20000
 00000140  00 00 00 00 00 00 00 00 cf bd 02 00
 ```
 
+### B.3 向量 C / Vector C
+
+C 在 B 的根元数据中增加下列键 128，其余数据相同。以下磁偏角为合成测试值，用于验证编码与查询语义。
+
+C adds root metadata key 128 below to B's data. The declination is a synthetic fixture for encoding and query semantics.
+
+```text
+128: {
+  0: -350,
+  1: 0,
+  2: 89832,
+  3: "2026-10-16",
+  4: "synthetic",
+  5: 0,
+  6: "2026-10-16",
+  7: "2027-10-15"
+}
+```
+
+| 查询 / Query | 结果 / Result |
+|---|---|
+| C, date `2026-10-16`, magnetic heading `200` | true heading `35850` |
+| C, date `2027-10-15`, true heading `35850` | magnetic heading `200` |
+| C, date `2026-10-15` or `2027-10-16` | declination `unavailable` |
+| A or B, any date | declination `unavailable` |
+
+```text
+00000000  41 52 52 54 01 00 00 00 40 00 18 00 8c 01 00 00
+00000010  40 00 00 00 03 00 00 00 01 02 03 04 05 06 07 08
+00000020  09 0a 0b 0c 0d 0e 0f 10 03 00 00 00 11 bb e2 da
+00000030  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00000040  4d 45 54 41 01 00 01 00 88 00 00 00 be 00 00 00
+00000050  00 00 00 00 00 00 00 00 47 45 4f 4d 01 00 01 00
+00000060  48 01 00 00 24 00 00 00 0c 00 00 00 03 00 00 00
+00000070  47 49 44 58 01 00 01 00 6c 01 00 00 20 00 00 00
+00000080  20 00 00 00 01 00 00 00 a8 00 01 01 64 54 65 73
+00000090  74 02 19 4e 20 03 00 04 01 06 a3 00 67 66 69 78
+000000a0  74 75 72 65 01 61 31 02 69 73 79 6e 74 68 65 74
+000000b0  69 63 07 83 a8 00 01 01 65 53 74 61 72 74 02 61
+000000c0  53 03 00 04 f5 05 00 06 00 07 00 a8 00 02 01 63
+000000d0  43 50 31 02 63 43 50 31 03 02 04 f5 05 19 27 10
+000000e0  06 00 07 1a 00 01 5e e8 a8 00 03 01 66 46 69 6e
+000000f0  69 73 68 02 61 46 03 01 04 f5 05 19 4e 20 06 00
+00000100  07 1a 00 02 bd cf 18 80 a8 00 39 01 5d 01 00 02
+00000110  1a 00 01 5e e8 03 6a 32 30 32 36 2d 31 30 2d 31
+00000120  36 04 69 73 79 6e 74 68 65 74 69 63 05 00 06 6a
+00000130  32 30 32 36 2d 31 30 2d 31 36 07 6a 32 30 32 37
+00000140  2d 31 30 2d 31 35 00 00 00 00 00 00 00 00 00 00
+00000150  00 00 00 00 00 00 00 00 e8 5e 01 00 10 27 00 00
+00000160  00 00 00 00 cf bd 02 00 20 4e 00 00 00 00 00 00
+00000170  03 00 00 00 00 00 00 00 20 4e 00 00 00 00 00 00
+00000180  00 00 00 00 00 00 00 00 cf bd 02 00
+```
+
 <a id="references"></a>
-## 规范性引用 / Normative references
+## 引用 / References
+
+### 规范性引用 / Normative references
 
 | Ref | Document |
 |---|---|
@@ -606,8 +718,17 @@ Both use route ID `01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10` and `S=20000
 | [R2] | RFC 8174 — *Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words* |
 | [R3] | RFC 8949 — *Concise Binary Object Representation (CBOR)* |
 | [R4] | RFC 8610 — *Concise Data Definition Language (CDDL): A Notational Convention to Express Concise Binary Object Representation (CBOR) and JSON Data Structures* |
+| [R5] | NOAA NCEI — *Magnetic Declination* |
 
 [R1]: https://www.rfc-editor.org/rfc/rfc2119
 [R2]: https://www.rfc-editor.org/rfc/rfc8174
 [R3]: https://www.rfc-editor.org/rfc/rfc8949.html
 [R4]: https://www.rfc-editor.org/rfc/rfc8610.html
+
+[R5]: https://www.ncei.noaa.gov/products/magnetic-declination
+
+### 资料性引用 / Informative reference
+
+[R6] NOAA NCEI — *World Magnetic Model (WMM)*.
+
+[R6]: https://www.ncei.noaa.gov/products/world-magnetic-model

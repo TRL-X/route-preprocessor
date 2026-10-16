@@ -1,6 +1,6 @@
 import { CBOR_LIMITS, decodeCbor, encodeCbor, invalid, resource, RteError, textBytes } from './cbor';
 import type { CborValue } from './cbor';
-import type { ElevationInfo, ElevNode, GeomNode, PreprocessingInfo, ProfileValue, RouteData, Stage, StationEvent } from './types';
+import type { ElevationInfo, MagneticDeclinationInfo, ElevNode, GeomNode, PreprocessingInfo, ProfileValue, RouteData, Stage, StationEvent } from './types';
 
 export { RteError } from './cbor';
 
@@ -56,6 +56,47 @@ function structured(value: CborValue | undefined, known: number[], label: string
     if (key < 128 && !known.includes(key)) invalid(`${label} uses reserved key ${key}.`);
   }
   return value;
+}
+
+/** Valid UTC Gregorian calendar date, including years before 0100. */
+function calendarDate(value: unknown): string {
+  if (typeof value !== 'string' || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) invalid('Date must use YYYY-MM-DD.');
+  const [year, month, day] = value.split('-').map(Number);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1]) invalid('Invalid Gregorian calendar date.');
+  return value;
+}
+
+export function validateMagneticDeclination(info: MagneticDeclinationInfo): void {
+  object(info, 'Magnetic declination');
+  integer(info.declinationCdeg, -18000, 18000, 'Declination');
+  integer(info.referenceLatE7, -LAT, LAT, 'Declination reference latitude');
+  integer(info.referenceLonE7, -LON, LON - 1, 'Declination reference longitude');
+  calendarDate(info.referenceDate);
+  string(info.source, 64, 'Declination source');
+  if (info.referenceHeightDm !== undefined) integer(info.referenceHeightDm, I32_MIN, I32_MAX, 'Declination reference height');
+  if ((info.validFrom === undefined) !== (info.validUntil === undefined)) invalid('Declination validity dates must appear together.');
+  if (info.validFrom !== undefined && info.validUntil !== undefined) {
+    calendarDate(info.validFrom); calendarDate(info.validUntil);
+    if (info.validFrom > info.referenceDate || info.referenceDate > info.validUntil) invalid('Declination reference date must be inside the validity interval.');
+  }
+}
+
+/** Returns the stored constant; absence and dates outside a declared interval are unavailable. */
+export function queryMagneticDeclination(info: MagneticDeclinationInfo | undefined, date: string): { declinationCdeg: number; applicability: 'specified' | 'unspecified' } {
+  calendarDate(date);
+  if (info === undefined) throw new RteError('unavailable', 'Magnetic declination is unavailable.');
+  validateMagneticDeclination(info);
+  if (info.validFrom !== undefined && (date < info.validFrom || date > info.validUntil!)) throw new RteError('unavailable', 'Magnetic declination is unavailable for this date.');
+  return { declinationCdeg: info.declinationCdeg, applicability: info.validFrom === undefined ? 'unspecified' : 'specified' };
+}
+
+export function convertHeading(headingCdeg: number, info: MagneticDeclinationInfo | undefined, date: string, target: 'true' | 'magnetic'): number {
+  if (!Number.isFinite(headingCdeg)) throw new RteError('range', 'Heading must be finite.');
+  const { declinationCdeg } = queryMagneticDeclination(info, date);
+  const value = (headingCdeg % 36000) + (target === 'true' ? declinationCdeg : -declinationCdeg);
+  return value - 36000 * Math.floor(value / 36000);
 }
 
 function decodeMeta(value: CborValue): Omit<RouteData, 'routeId' | 'revision' | 'geom' | 'elev'> {
@@ -126,7 +167,19 @@ function decodeMeta(value: CborValue): Omit<RouteData, 'routeId' | 'revision' | 
       return stage;
     });
   }
-  return { name, totalSDm, routeKind, preprocessing, stations, ...(elevationInfo ? { elevationInfo } : {}), ...(stages ? { stages } : {}) };
+  let magneticDeclination: MagneticDeclinationInfo | undefined;
+  if (root.has(128)) {
+    const info = structured(root.get(128), [0, 1, 2, 3, 4, 5, 6, 7], 'META.magnetic_declination');
+    magneticDeclination = {
+      declinationCdeg: info.get(0) as number, referenceLatE7: info.get(1) as number,
+      referenceLonE7: info.get(2) as number, referenceDate: info.get(3) as string, source: info.get(4) as string,
+      ...(info.has(5) ? { referenceHeightDm: info.get(5) as number } : {}),
+      ...(info.has(6) ? { validFrom: info.get(6) as string } : {}),
+      ...(info.has(7) ? { validUntil: info.get(7) as string } : {}),
+    };
+    validateMagneticDeclination(magneticDeclination);
+  }
+  return { name, totalSDm, routeKind, preprocessing, stations, ...(magneticDeclination ? { magneticDeclination } : {}), ...(elevationInfo ? { elevationInfo } : {}), ...(stages ? { stages } : {}) };
 }
 
 function toMeta(route: RouteData): Map<number, CborValue> {
@@ -169,6 +222,15 @@ function toMeta(route: RouteData): Map<number, CborValue> {
       if (stage.maxHDm !== undefined) result.set(3, stage.maxHDm);
       return result;
     }));
+  }
+  if (route.magneticDeclination !== undefined) {
+    const d = route.magneticDeclination;
+    validateMagneticDeclination(d);
+    const info = map([[0, d.declinationCdeg], [1, d.referenceLatE7], [2, d.referenceLonE7], [3, d.referenceDate], [4, d.source]]);
+    if (d.referenceHeightDm !== undefined) info.set(5, d.referenceHeightDm);
+    if (d.validFrom !== undefined) info.set(6, d.validFrom);
+    if (d.validUntil !== undefined) info.set(7, d.validUntil);
+    meta.set(128, info);
   }
   return meta;
 }

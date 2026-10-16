@@ -56,6 +56,7 @@ async function noOverflow(page: Page) {
 test.beforeEach(async ({ page }) => {
   // Route editing and binary export must work when the external basemap is unavailable.
   await page.route('https://tiles.openfreemap.org/**', route => route.abort());
+  await page.route('https://geomag.bgs.ac.uk/web_service/**', route => route.abort());
   await page.goto('/');
 });
 
@@ -328,4 +329,100 @@ test('restored legacy diagnostics follow the selected language without displayin
   ]);
   expect(report.issues[0].message).toContain('Count: 5.');
 
+});
+
+
+test('magnetic declination survives drafts and exports as optional metadata', async ({ page }) => {
+  await importText(page, gpx(complete));
+  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await page.getByRole('combobox', { name: 'Declination source', exact: true }).selectOption('manual');
+  await page.getByRole('checkbox', { name: 'Include magnetic declination', exact: true }).check();
+  await expect(page.getByText('Invalid magnetic declination metadata', { exact: true })).toBeVisible();
+  await page.getByLabel('Declination (°)', { exact: true }).pressSequentially('-3.50');
+  await expect(page.getByLabel('Declination (°)', { exact: true })).toHaveValue('-3.50');
+  await page.getByLabel('Reference date (UTC)', { exact: true }).fill('2026-10-16');
+  await page.getByLabel('Model/version or observation source', { exact: true }).fill('synthetic');
+  await page.getByLabel('WGS84 ellipsoid height (m, optional)', { exact: true }).fill('0');
+  await page.getByLabel('Valid from (UTC, inclusive)', { exact: true }).fill('2026-10-16');
+  await page.getByLabel('Valid until (UTC, inclusive)', { exact: true }).fill('2027-10-15');
+  await expect(page.getByText('Invalid magnetic declination metadata', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('status', { name: 'Saved on this device', exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: /Continue editing/ }).click();
+  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(page.getByLabel('Declination (°)', { exact: true })).toHaveValue('-3.5');
+  const output = await downloadRoute(page);
+  expect(output.route.magneticDeclination).toEqual({ declinationCdeg: -350,
+    referenceLatE7: 0, referenceLonE7: 0, referenceDate: '2026-10-16', source: 'synthetic',
+    referenceHeightDm: 0, validFrom: '2026-10-16', validUntil: '2027-10-15' });
+  await step(page, 'Route');
+  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Include magnetic declination', exact: true }).uncheck();
+  const omitted = await downloadRoute(page);
+  expect(omitted.route.magneticDeclination).toBeUndefined();
+});
+
+
+function bgsResult(url: URL, declination = -7.464) {
+  return { 'geomagnetic-field-model-result': {
+    model: 'wmm', model_revision: '2025', date: { value: url.searchParams.get('date') },
+    coordinates: { latitude: { value: Number(url.searchParams.get('latitude')) }, longitude: { value: Number(url.searchParams.get('longitude')) }, altitude: { value: 0 } },
+    'field-value': { declination: { units: 'deg (east)', value: declination } },
+  } };
+}
+
+test('automatically fetches declination and removes the old value when a subsequent lookup fails', async ({ page }) => {
+  const requests: URL[] = [];
+  let online = true;
+  await page.route('https://geomag.bgs.ac.uk/web_service/**', async route => {
+    const url = new URL(route.request().url()); requests.push(url);
+    if (!online) { await route.abort(); return; }
+    await route.fulfill({ json: bgsResult(url) });
+  });
+  await importText(page, gpx(complete));
+  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Declination source', exact: true })).toHaveValue('auto');
+  await page.getByLabel('Calculation date (UTC)', { exact: true }).fill('2026-10-16');
+  await expect(page.getByRole('status').filter({ hasText: 'Reference fetched:' })).toContainText('-7.46°');
+  const output = await downloadRoute(page);
+  expect(output.route.magneticDeclination).toMatchObject({ declinationCdeg: -746, source: 'WMM2025 / BGS', referenceDate: '2026-10-16', referenceHeightDm: 0 });
+  expect(output.route.magneticDeclination).not.toHaveProperty('validUntil');
+  expect(requests.at(-1)!.searchParams.get('altitude')).toBe('0');
+  online = false;
+  await step(page, 'Route');
+  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await page.getByLabel('Calculation date (UTC)', { exact: true }).fill('2026-10-17');
+  await expect(page.getByRole('status').filter({ hasText: 'Magnetic declination unavailable' })).toBeVisible();
+  const missing = await downloadRoute(page);
+  expect(missing.route.magneticDeclination).toBeUndefined();
+});
+
+test('offline automatic lookup leaves optional metadata absent and still allows export', async ({ page }) => {
+  await importText(page, gpx(complete));
+  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Magnetic declination unavailable' })).toBeVisible();
+  const missing = await downloadRoute(page);
+  expect(missing.route.magneticDeclination).toBeUndefined();
+});
+
+test('a late automatic declination response cannot overwrite a manual value', async ({ page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let requested = false;
+  await page.route('https://geomag.bgs.ac.uk/web_service/**', async route => {
+    requested = true;
+    await pending;
+    await route.fulfill({ json: bgsResult(new URL(route.request().url()), 15) }).catch(() => {});
+  });
+  await importText(page, gpx(complete));
+  await expect.poll(() => requested).toBe(true);
+  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await page.getByRole('combobox', { name: 'Declination source', exact: true }).selectOption('manual');
+  await page.getByRole('checkbox', { name: 'Include magnetic declination', exact: true }).check();
+  await page.getByLabel('Declination (°)', { exact: true }).fill('0');
+  await page.getByLabel('Reference date (UTC)', { exact: true }).fill('2026-10-16');
+  await page.getByLabel('Model/version or observation source', { exact: true }).fill('manual observation');
+  release();
+  const output = await downloadRoute(page);
+  expect(output.route.magneticDeclination).toMatchObject({ declinationCdeg: 0, source: 'manual observation' });
 });

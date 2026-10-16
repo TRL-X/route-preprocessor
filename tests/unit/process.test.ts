@@ -299,3 +299,17 @@ describe('preprocessing, profile sampling, and quantization', () => {
     expect(result.issues.some((value) => value.code === 'ROUTE_NAME_INVALID')).toBe(true);
   });
 });
+
+
+it('carries optional magnetic metadata through processing and blocks incomplete values', () => {
+  const reference = buildReference(source([point(0, 0), point(0, 0.001)]));
+  const stations = createStations(reference, []);
+  const magneticDeclination = { declinationCdeg: -350, referenceLatE7: 0, referenceLonE7: 0,
+    referenceDate: '2026-10-16', source: 'synthetic' };
+  const result = processRoute(reference, stations, { ...options, elevationMode: 'omit' }, { ...identity, magneticDeclination });
+  expect(result.route).not.toBeNull();
+  expect(decodeRte(encodeRte(result.route!)).magneticDeclination).toEqual(magneticDeclination);
+  const invalid = processRoute(reference, stations, options, { ...identity, magneticDeclination: { ...magneticDeclination, source: '' } });
+  expect(invalid.route).toBeNull();
+  expect(invalid.issues).toContainEqual(expect.objectContaining({ code: 'MAGNETIC_DECLINATION_INVALID', severity: 'error' }));
+});

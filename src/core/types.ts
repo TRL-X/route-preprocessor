@@ -40,6 +40,11 @@ export interface ElevationInfo {
   source: 0 | 1 | 2 | 3 | 4; verticalDatum: VerticalDatum; quality: 0 | 1 | 2;
   sourceDetail?: string; datumName?: string; containsFilledValues?: boolean;
 }
+export interface MagneticDeclinationInfo {
+  declinationCdeg: number; referenceLatE7: number; referenceLonE7: number;
+  referenceDate: string; source: string; referenceHeightDm?: number;
+  validFrom?: string; validUntil?: string;
+}
 export interface PreprocessingInfo {
   tool: string; toolVersion: string; recipeId: string; inputSha256?: Uint8Array;
   parameters?: { geometryToleranceDm?: number; elevationGridDm?: number; elevationSmoothingWindowDm?: number };
@@ -47,12 +52,13 @@ export interface PreprocessingInfo {
 export interface RouteData {
   routeId: Uint8Array; revision: number; name: string; routeKind: 0 | 1; totalSDm: number;
   geom: GeomNode[]; elev?: ElevNode[]; elevationInfo?: ElevationInfo;
+  magneticDeclination?: MagneticDeclinationInfo;
   stations: StationEvent[]; stages?: Stage[]; preprocessing: PreprocessingInfo;
 }
 export interface ProcessingOptions {
   geometryToleranceM: number; elevationIntervalM: number; smoothingWindowM: number;
   elevationMode: 'omit' | 'source' | 'interpolate'; acceptUncertainElevation: boolean;
 }
-export interface RouteIdentity { routeId: Uint8Array; revision: number; name: string; inputSha256?: Uint8Array }
+export interface RouteIdentity { magneticDeclination?: MagneticDeclinationInfo; routeId: Uint8Array; revision: number; name: string; inputSha256?: Uint8Array }
 export interface ProcessingResult { route: RouteData | null; issues: ProcessingIssue[] }
 export interface ProfileValue { hDm: number; upDm: number; downDm: number }
