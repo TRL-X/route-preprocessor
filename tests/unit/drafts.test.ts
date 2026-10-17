@@ -1,6 +1,6 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadDraft, reserveExportRevision, RevisionExhaustedError, saveDraft } from '../../src/app/drafts';
+import { loadDraft, migrateDraftEditor, reserveExportRevision, RevisionExhaustedError, saveDraft } from '../../src/app/drafts';
 
 const DB_NAME = 'trl-x-route-studio';
 const MAX_REVISION = 0xffffffff;
@@ -91,6 +91,30 @@ describe('transactional export revision reservations', () => {
 });
 
 describe('draft storage migration', () => {
+  it('upgrades elevation omission and removes obsolete declination height without changing identity or edits', () => {
+    const legacy = {
+      routeId: Uint8Array.of(1, 2, 3), name: '旧草稿', stations: [{ name: 'CP1', s: 125 }],
+      options: { geometryToleranceM: 4, elevationIntervalM: 20, smoothingWindowM: 0, elevationMode: 'omit' as const, acceptUncertainElevation: false },
+      magneticDeclination: { declinationCdeg: 0, referenceLatE7: 0, referenceLonE7: 0, referenceDate: '2026-10-17', source: 'manual', referenceHeightDm: 123 },
+    };
+    const migrated = migrateDraftEditor(legacy);
+    expect(migrated.options).toEqual({ ...legacy.options, elevationMode: 'source' });
+    expect(migrated.magneticDeclination).toEqual({ declinationCdeg: 0, referenceLatE7: 0, referenceLonE7: 0, referenceDate: '2026-10-17', source: 'manual' });
+    expect(migrated.routeId).toEqual(legacy.routeId);
+    expect(migrated.name).toBe(legacy.name);
+    expect(migrated.stations).toEqual(legacy.stations);
+    expect(legacy.options.elevationMode).toBe('omit');
+    expect(legacy.magneticDeclination.referenceHeightDm).toBe(123);
+  });
+
+  it('preserves current elevation settings without inventing optional magnetic metadata', () => {
+    for (const elevationMode of ['source', 'interpolate'] as const) {
+      const current = { options: { geometryToleranceM: 2, elevationIntervalM: 10, smoothingWindowM: 0, elevationMode, acceptUncertainElevation: true } };
+      expect(migrateDraftEditor(current)).toEqual(current);
+      expect(migrateDraftEditor(current).magneticDeclination).toBeUndefined();
+    }
+  });
+
   it('preserves the old draft store and its typed-array data through the version-two upgrade', async () => {
     const oldDatabase = await openVersionOne();
     const legacyDraft = { version: 1, editor: { routeId: Uint8Array.of(1, 2, 3), name: '旧草稿' }, ledger: { previous: { revision: 7, hash: 'old-hash' } } };

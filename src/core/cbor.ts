@@ -1,9 +1,10 @@
 /** Restricted deterministic CBOR profile used by TRL-X META (spec §7.1). */
 export type CborValue = number | boolean | null | string | Uint8Array | CborValue[] | Map<number, CborValue>;
 export type RteErrorCode = 'invalid' | 'unsupported' | 'resource' | 'unavailable' | 'range';
+export type MagneticApplicability = 'applicable' | 'unspecified' | 'unavailable' | 'outside_interval' | 'time_unknown';
 
 export class RteError extends Error {
-  constructor(public readonly code: RteErrorCode, message: string) {
+  constructor(public readonly code: RteErrorCode, message: string, public readonly applicability?: MagneticApplicability) {
     super(message);
     this.name = 'RteError';
   }

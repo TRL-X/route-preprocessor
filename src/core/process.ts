@@ -19,7 +19,12 @@ export function quantize(value: number): number {
 export function normalizeLongitude(value: number): number {
   return value >= -180 && value < 180 ? value : ((value + 180) % 360 + 360) % 360 - 180;
 }
-const deltaLon = (a: number, b: number) => normalizeLongitude(b - a);
+const deltaLon = (a: number, b: number) => {
+  const delta = (b - a) % 360;
+  // Preserve the sign of exactly half a turn so reversed segments retrace
+  // the same represented arc in the opposite direction.
+  return delta > 180 ? delta - 360 : delta < -180 ? delta + 360 : delta;
+};
 const sameCoordinate = (a: SourcePoint, b: SourcePoint) => a.lat === b.lat && deltaLon(a.lon, b.lon) === 0;
 const lonE7 = (value: number) => { const result = quantize(normalizeLongitude(value) * 1e7); return result === 1_800_000_000 ? -1_800_000_000 : result; };
 
@@ -274,18 +279,18 @@ function repairedProfile(reference: ReferenceRoute, mode: ProcessingOptions['ele
     while (index < points.length && points[index].elevation === null) index++;
     const left = points[firstMissing - 1];
     const right = points[index];
-    if (mode !== 'interpolate' || (!left && !right)) {
+    // Interpolation requires observations on both sides. Carrying the nearest
+    // height into an unknown endpoint gap would invent flat terrain.
+    if (mode !== 'interpolate' || !left || !right) {
       issues.push(issue('INCOMPLETE_ELEVATION', {}, 'error', points[firstMissing].s));
       return null;
     }
-    const span = (right?.s ?? points[points.length - 1].s) - (left?.s ?? points[0].s);
+    const span = right.s - left.s;
     if (span > ELEVATION_GAP_WARNING_M) {
       issues.push(issue('ELEVATION_LARGE_GAP', { limit: ELEVATION_GAP_WARNING_M, distance: Math.round(span * 100) / 100 }, 'warning', points[firstMissing].s));
     }
     for (let gap = firstMissing; gap < index; gap++) {
-      points[gap].elevation = left && right
-        ? left.elevation! + (right.elevation! - left.elevation!) * (points[gap].s - left.s) / (right.s - left.s)
-        : (left ?? right).elevation!;
+      points[gap].elevation = left.elevation! + (right.elevation! - left.elevation!) * (points[gap].s - left.s) / (right.s - left.s);
     }
     filled = true;
   }
@@ -352,7 +357,7 @@ export function processRoute(reference: ReferenceRoute, stations: DraftStation[]
   if (textIssue(identity.name, 96)) issues.push(issue('ROUTE_NAME_INVALID'));
   if (identity.inputSha256 && identity.inputSha256.length !== 32) issues.push(issue('SOURCE_HASH_INVALID'));
   if (!Number.isFinite(reference.totalM) || reference.totalM < 0.1 || reference.totalM * 10 > UINT32_MAX) issues.push(issue('DISTANCE_RANGE'));
-  if (!Number.isFinite(options.geometryToleranceM) || options.geometryToleranceM < 0 || options.geometryToleranceM > 1000 || !Number.isFinite(options.elevationIntervalM) || options.elevationIntervalM < 0.1 || options.elevationIntervalM > 1000 || !Number.isFinite(options.smoothingWindowM) || options.smoothingWindowM < 0 || options.smoothingWindowM > 10_000 || !['omit', 'source', 'interpolate'].includes(options.elevationMode)) issues.push(issue('OPTIONS_INVALID'));
+  if (!Number.isFinite(options.geometryToleranceM) || options.geometryToleranceM < 0 || options.geometryToleranceM > 1000 || !Number.isFinite(options.elevationIntervalM) || options.elevationIntervalM < 0.1 || options.elevationIntervalM > 1000 || !Number.isFinite(options.smoothingWindowM) || options.smoothingWindowM < 0 || options.smoothingWindowM > 10_000 || !['source', 'interpolate'].includes(options.elevationMode)) issues.push(issue('OPTIONS_INVALID'));
   const totalDm = Number.isFinite(reference.totalM) ? quantize(reference.totalM * 10) : 0;
   if (stations.length < 2 || stations.length > 4096) issues.push(issue('STATION_COUNT'));
   const events: StationEvent[] = stations.map((station) => {
@@ -367,36 +372,33 @@ export function processRoute(reference: ReferenceRoute, stations: DraftStation[]
   if (starts.length !== 1 || finishes.length !== 1 || events[0] !== starts[0] || events[events.length - 1] !== finishes[0] || starts[0]?.sDm !== 0 || finishes[0]?.sDm !== totalDm || !starts[0]?.stageBoundary || !finishes[0]?.stageBoundary) issues.push(issue('ENDPOINT_EVENTS'));
   const boundaries = events.filter((event) => event.stageBoundary);
   for (let index = 1; index < boundaries.length; index++) if (boundaries[index].sDm <= boundaries[index - 1].sDm) issues.push(issue('BOUNDARY_COLLISION', {}, 'error', boundaries[index].sDm / 10));
-  if (options.elevationMode !== 'omit' && reference.elevationUncertain && !options.acceptUncertainElevation) issues.push(issue('ELEVATION_UNCONFIRMED'));
+  if (reference.elevationUncertain && !options.acceptUncertainElevation) issues.push(issue('ELEVATION_UNCONFIRMED'));
   if (issues.some((entry) => entry.severity === 'error')) return { route: null, issues };
   const boundaryDm = boundaries.map((event) => event.sDm);
+  const profile = elevation(reference, boundaryDm, options, issues);
+  if (!profile) return { route: null, issues };
   const geom = geometry(reference, boundaryDm, options.geometryToleranceM, issues);
-  const profile = options.elevationMode === 'omit' ? null : elevation(reference, boundaryDm, options, issues);
   if (issues.some((entry) => entry.severity === 'error')) return { route: null, issues };
   const stages: Stage[] = [];
   let profileIndex = 0;
   for (let index = 1; index < boundaries.length; index++) {
     const from = boundaries[index - 1];
     const to = boundaries[index];
-    const stage: Stage = { fromEventId: from.eventId, toEventId: to.eventId };
-    if (profile) {
-      let min = Infinity;
-      let max = -Infinity;
-      while (profileIndex < profile.nodes.length && profile.nodes[profileIndex].sDm <= to.sDm) {
-        const node = profile.nodes[profileIndex];
-        min = Math.min(min, node.hDm); max = Math.max(max, node.hDm);
-        if (node.sDm === to.sDm) break;
-        profileIndex++;
-      }
-      stage.minHDm = min; stage.maxHDm = max;
+    let min = Infinity;
+    let max = -Infinity;
+    while (profileIndex < profile.nodes.length && profile.nodes[profileIndex].sDm <= to.sDm) {
+      const node = profile.nodes[profileIndex];
+      min = Math.min(min, node.hDm); max = Math.max(max, node.hDm);
+      if (node.sDm === to.sDm) break;
+      profileIndex++;
     }
-    stages.push(stage);
+    stages.push({ fromEventId: from.eventId, toEventId: to.eventId, minHDm: min, maxHDm: max });
   }
   return { route: {
     routeId: identity.routeId.slice(), revision: identity.revision, name: identity.name, routeKind: reference.isClosed ? 1 : 0,
     totalSDm: totalDm, geom, stations: events, stages,
     ...(identity.magneticDeclination ? { magneticDeclination: { ...identity.magneticDeclination } } : {}),
-    ...(profile ? { elev: profile.nodes, elevationInfo: { source: 1 as const, verticalDatum: reference.elevationDatum, quality: 1 as const, sourceDetail: reference.elevationUncertain ? 'User-accepted source altitude; vertical datum unknown' : 'Source file elevation', containsFilledValues: profile.filled } } : {}),
-    preprocessing: { tool: 'TRL-X Route Studio', toolVersion: '0.1.0', recipeId: `browser-v1-${options.elevationMode}`, ...(identity.inputSha256 ? { inputSha256: identity.inputSha256.slice() } : {}), parameters: { geometryToleranceDm: quantize(options.geometryToleranceM * 10), ...(profile ? { elevationGridDm: quantize(options.elevationIntervalM * 10), elevationSmoothingWindowDm: quantize(options.smoothingWindowM * 10) } : {}) } },
+    elev: profile.nodes, elevationInfo: { source: 1, verticalDatum: reference.elevationDatum, quality: 1, sourceDetail: reference.elevationUncertain ? 'User-accepted source altitude; vertical datum unknown' : 'Source file elevation', containsFilledValues: profile.filled },
+    preprocessing: { tool: 'TRL-X Route Studio', toolVersion: '0.1.0', recipeId: `browser-v1-${options.elevationMode}`, ...(identity.inputSha256 ? { inputSha256: identity.inputSha256.slice() } : {}), parameters: { geometryToleranceDm: quantize(options.geometryToleranceM * 10), elevationGridDm: quantize(options.elevationIntervalM * 10), elevationSmoothingWindowDm: quantize(options.smoothingWindowM * 10) } },
   }, issues };
 }

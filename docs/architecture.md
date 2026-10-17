@@ -24,7 +24,7 @@
 | `tests/unit` | 核心算法、格式向量与异常输入、草稿/修订号逻辑。 |
 | `tests/e2e` | Playwright 用户流程测试。 |
 | `tests/fixtures` | 回归样例及字节身份清单，不作为网页静态资源。 |
-| `docs` | 格式规范、当前实现策略及架构说明。 |
+| `docs` | 规范入口与兼容性、当前实现策略及架构说明。 |
 
 依赖方向为 UI → Worker 任务 / 核心类型；Worker → core；core → 类型及 XML 解析器。`process.ts` 复用 `import.ts` 的名称清洗函数，因此它间接依赖 XML 模块，但不会读取 DOM。`core` 不读取地图坐标、不使用 IndexedDB，也不负责文件下载或身份持久化。
 
@@ -56,7 +56,7 @@
                   导出确认 → encodeRte → decodeRte → 下载
 ```
 
-导入后保留解析后的源点与地标，编辑参数和结果分开表达。方向或环线起点改变时重新构建 reference 与站点关联，避免旧里程和旧候选继续生效。原始输入 SHA-256 记录在编辑模型与导出元数据中；本地草稿保存解析后的数据，不保存原始输入字节副本。
+导入后保留解析后的源点与地标，编辑参数和结果分开表达。方向或环线起点改变时重新构建 reference 与站点关联，避免旧里程和旧候选继续生效。原始输入 SHA-256 和处理参数保留在编辑模型与质量报告中，不写入 RTE 元数据；本地草稿保存解析后的数据，不保存原始输入字节副本。
 
 XState 当前仅管理步骤导航。业务有效性由 `processRoute`、当前任务状态及用户确认共同控制，而不是假设“进入导出页就已合法”。导出要求最新编辑版本已处理完成、没有阻塞错误、没有在途任务，并已确认路线与方向。站点的 `confirmed` 单独参与处理门控。
 
@@ -89,8 +89,8 @@ RTE/CBOR 使用 `RteError`，分类如下：
 | `invalid` | 文件布局、数据取值、CRC 或跨段语义不合法。 |
 | `unsupported` | 当前实现不能解释的主版本、schema、段版本或关键段。 |
 | `resource` | 超过当前读取器/编码器资源预算，不代表格式本身不允许。 |
-| `unavailable` | 请求高程查询时没有完整 `ELEV`，或磁偏角缺省/查询日期超出使用区间。 |
-| `range` | 剖面查询里程超出范围。 |
+| `unavailable` | 查询数据缺失，或磁偏角缺省、查询日期超出使用区间、声明区间但无可信日期。有效 RTE 文件必须含完整 `ELEV`。 |
+| `range` | 几何或剖面查询里程超出范围。 |
 
 Worker 对抛出的异常返回 `{ ok: false, error: message }`，当前不跨 Worker 传递 `RteError.code`；`ProcessingResult` 中的结构化 issues 则完整返回。取消由客户端使用 `AbortError` 表示。
 
@@ -106,7 +106,7 @@ MapLibre 的显示世界副本、日期变更线展开和 Mercator 纬度限制�
 
 ## 规范、样例与维护
 
-`docs/TRL-X_Route_V1_Specification_ZH_EN.md` 是用户提供的草案规范副本，目前为格式 1.0 / 文档修订 0.3。格式变更、处理策略变更和 UI 变更分别记录，不能仅因实现方便改变规范字段含义。
+规范、CDDL 和参考向量统一在 [TRL-X/route-specification](https://github.com/TRL-X/route-specification) 维护，本仓库不再托管规范副本。当前对齐格式 1.0 / Initial edition，具体提交和旧草稿迁移见[实现对齐与兼容性](specification.md)。格式变更、处理策略变更和 UI 变更分别记录，不能仅因实现方便改变规范字段含义。
 
 8 份 `2026MY` GPX/KML 来自用户提供目录；[样例说明](../tests/fixtures/routes/2026MY/README.md)和 [manifest](../tests/fixtures/routes/2026MY/manifest.json)保存来源、大小、SHA-256 与原始观测。文件中的 `creator` 指向 ovitalmap，KML `author` 为空；在当前样例与规范文档中未发现明确许可证声明，这些元数据不作为许可授权的替代。应用运行时不引用这些文件，也不将它们复制到 `public` 或 `dist`。
 

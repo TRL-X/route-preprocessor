@@ -20,22 +20,21 @@ describe('stage-specific user diagnostics', () => {
       expect(codes(issuesForStep(issues, step, options))).toEqual(['ROUTE_NAME_INVALID', 'STATION_UNCONFIRMED', 'INCOMPLETE_ELEVATION']);
     }
   });
-  it('avoids elevation warnings when omitted and duplicate KML confirmation messages', () => {
+  it('shows required elevation warnings and avoids duplicate KML confirmation messages', () => {
     const imported = [warning('IMPORT_SHORT_SEGMENT'), warning('IMPORT_MULTIPLE_SEGMENTS'), warning('IMPORT_KML_ELEVATION')];
     expect(codes(issuesForStep(imported, 'route', options))).toEqual(['IMPORT_SHORT_SEGMENT']);
-    expect(issuesForStep(imported, 'elevation', { ...options, elevationMode: 'omit' })).toEqual([]);
+    expect(codes(issuesForStep(imported, 'elevation', options))).toEqual(['IMPORT_KML_ELEVATION']);
     expect(codes(issuesForStep([...imported, error('ELEVATION_UNCONFIRMED')], 'elevation', options))).toEqual(['ELEVATION_UNCONFIRMED']);
     expect(issuesForStep(imported, 'elevation', { ...options, acceptUncertainElevation: true })).toEqual([]);
   });
   it('shows long elevation gap warnings without adding export blockers', () => {
     const issues = [warning('ELEVATION_LARGE_GAP')];
     expect(codes(issuesForStep(issues, 'elevation', { ...options, elevationMode: 'interpolate' }))).toEqual(['ELEVATION_LARGE_GAP']);
-    expect(issuesForStep(issues, 'elevation', { ...options, elevationMode: 'omit' })).toEqual([]);
     expect(issuesForStep(issues, 'export', options)).toEqual([]);
   });
   it('keeps unexpected blocking failures visible and puts invalid parameters on the editable step', () => {
     expect(codes(issuesForStep([error('processing'), error('FUTURE_ERROR')], 'stations', options))).toEqual(['processing', 'FUTURE_ERROR']);
     expect(codes(issuesForStep([error('OPTIONS_INVALID')], 'route', { ...options, geometryToleranceM: NaN }))).toEqual(['OPTIONS_INVALID']);
-    expect(codes(issuesForStep([error('OPTIONS_INVALID')], 'elevation', { ...options, elevationMode: 'omit', elevationIntervalM: NaN }))).toEqual(['OPTIONS_INVALID']);
+    expect(codes(issuesForStep([error('OPTIONS_INVALID')], 'elevation', { ...options, elevationIntervalM: NaN }))).toEqual(['OPTIONS_INVALID']);
   });
 });

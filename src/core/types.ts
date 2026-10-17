@@ -35,14 +35,14 @@ export interface StationEvent {
   eventId: number; name: string; shortLabel: string; kind: StationKind;
   stageBoundary: boolean; sDm: number; actualLatE7: number; actualLonE7: number;
 }
-export interface Stage { fromEventId: number; toEventId: number; minHDm?: number; maxHDm?: number }
+export interface Stage { fromEventId: number; toEventId: number; minHDm: number; maxHDm: number }
 export interface ElevationInfo {
   source: 0 | 1 | 2 | 3 | 4; verticalDatum: VerticalDatum; quality: 0 | 1 | 2;
   sourceDetail?: string; datumName?: string; containsFilledValues?: boolean;
 }
 export interface MagneticDeclinationInfo {
   declinationCdeg: number; referenceLatE7: number; referenceLonE7: number;
-  referenceDate: string; source: string; referenceHeightDm?: number;
+  referenceDate: string; source: string;
   validFrom?: string; validUntil?: string;
 }
 export interface PreprocessingInfo {
@@ -51,13 +51,15 @@ export interface PreprocessingInfo {
 }
 export interface RouteData {
   routeId: Uint8Array; revision: number; name: string; routeKind: 0 | 1; totalSDm: number;
-  geom: GeomNode[]; elev?: ElevNode[]; elevationInfo?: ElevationInfo;
+  geom: GeomNode[]; elev: ElevNode[]; elevationInfo: ElevationInfo;
   magneticDeclination?: MagneticDeclinationInfo;
-  stations: StationEvent[]; stages?: Stage[]; preprocessing: PreprocessingInfo;
+  stations: StationEvent[]; stages?: Stage[];
+  /** Application provenance for reports; not part of the RTE metadata schema. */
+  preprocessing?: PreprocessingInfo;
 }
 export interface ProcessingOptions {
   geometryToleranceM: number; elevationIntervalM: number; smoothingWindowM: number;
-  elevationMode: 'omit' | 'source' | 'interpolate'; acceptUncertainElevation: boolean;
+  elevationMode: 'source' | 'interpolate'; acceptUncertainElevation: boolean;
 }
 export interface RouteIdentity { magneticDeclination?: MagneticDeclinationInfo; routeId: Uint8Array; revision: number; name: string; inputSha256?: Uint8Array }
 export interface ProcessingResult { route: RouteData | null; issues: ProcessingIssue[] }

@@ -14,7 +14,7 @@ const fixtureDirectory = fileURLToPath(new URL('../fixtures/routes/2026MY/', imp
 const manifest = JSON.parse(readFileSync(`${fixtureDirectory}/manifest.json`, 'utf8')) as { files: { file: string; format: string; observed: { point_count: number; landmark_count: number; missing_elevation_count: number } }[] };
 
 describe('route import', () => {
-  it.each(manifest.files)('reads $file and exports a complete geometry without pretending missing elevation is known', (entry) => {
+  it.each(manifest.files)('reads $file and blocks export until the elevation profile is complete', (entry) => {
     const parsed = parseRouteFile(readFileSync(`${fixtureDirectory}/${entry.file}`, 'utf8'), entry.file);
     expect(parsed.format).toBe(entry.format);
     expect(parsed.routes).toHaveLength(1);
@@ -23,18 +23,10 @@ describe('route import', () => {
     expect(parsed.routes[0].points.filter((value) => value.elevation === null)).toHaveLength(entry.observed.missing_elevation_count);
     const reference = buildReference(parsed.routes[0]);
     const stations = createStations(reference, parsed.landmarks).map((station) => ({ ...station, confirmed: true }));
-    const result = processRoute(reference, stations, { ...options, elevationMode: 'omit' }, identity);
-    expect(result.issues.filter((value) => value.severity === 'error')).toEqual([]);
-    expect(result.route).not.toBeNull();
-    expect(result.route!.elev).toBeUndefined();
-    expect(result.route!.elevationInfo).toBeUndefined();
-    expect(result.route!.geom[0].sDm).toBe(0);
-    expect(result.route!.geom.at(-1)!.sDm).toBe(quantize(reference.totalM * 10));
-    expect(result.route!.geom.every((value, index, values) => index === 0 || value.sDm > values[index - 1].sDm)).toBe(true);
-    expect(result.route!.geom.every((value, index, values) => index === 0 || value.latE7 !== values[index - 1].latE7 || value.lonE7 !== values[index - 1].lonE7)).toBe(true);
-    const bytes = encodeRte(result.route!);
-    expect(decodeRte(bytes).totalSDm).toBe(result.route!.totalSDm);
-    expect(encodeRte(decodeRte(bytes))).toEqual(bytes);
+    const result = processRoute(reference, stations, { ...options, acceptUncertainElevation: true }, identity);
+    expect(reference.points.some((value) => value.elevation === null)).toBe(true);
+    expect(result.route).toBeNull();
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'INCOMPLETE_ELEVATION', severity: 'error' }));
   });
 
   it('keeps namespaced GPX segments and routes separate', () => {
@@ -155,11 +147,39 @@ describe('reference distance and station events', () => {
     expect(() => positionAt(reference, -1)).toThrow();
     expect(() => positionAt(reference, reference.totalM + 1)).toThrow();
   });
+
+  it.each([
+    [-170, 10, -80],
+    [10, -170, -80],
+    [-10, 170, 80],
+    [170, -10, 80],
+  ])('preserves the sign of the 180-degree longitude displacement from %s to %s', (from, to, midpoint) => {
+    const route = source([point(0, from), point(0, to)]);
+    const forward = buildReference(route);
+    const backward = buildReference(route, { reverse: true });
+    expect(positionAt(forward, forward.totalM / 2).lon).toBe(midpoint);
+    expect(positionAt(backward, backward.totalM / 2).lon).toBe(midpoint);
+    expect(backward.totalM).toBe(forward.totalM);
+    for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(positionAt(forward, forward.totalM * fraction).lon).toBeCloseTo(positionAt(backward, backward.totalM * (1 - fraction)).lon, 10);
+    }
+    const candidates = matchLandmark(forward, { id: 'middle', name: 'Middle', lat: 0, lon: midpoint });
+    expect(candidates[0].distanceM).toBeCloseTo(0, 8);
+    expect(candidates[0].s).toBeCloseTo(forward.totalM / 2, 6);
+  });
 });
 
 describe('preprocessing, profile sampling, and quantization', () => {
   it('rounds ties away from zero', () => {
     expect([1.5, -1.5, 0.5, -0.5].map(quantize)).toEqual([2, -2, 1, -1]);
+  });
+
+  it('rejects a persisted option that would omit the required elevation section', () => {
+    const reference = buildReference(source([point(0, 0), point(0, 0.001)]));
+    const persistedOptions = JSON.parse(JSON.stringify({ ...options, elevationMode: 'omit' })) as ProcessingOptions;
+    const result = processRoute(reference, createStations(reference, []), persistedOptions, identity);
+    expect(result.route).toBeNull();
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'OPTIONS_INVALID', severity: 'error' }));
   });
 
   it('preserves exact stage boundary nodes in GEOM and ELEV and computes stage extrema', () => {
@@ -214,12 +234,12 @@ describe('preprocessing, profile sampling, and quantization', () => {
     [point(0, 0, null), point(0, 0.0001, 10)],
     [point(0, 0, 10), point(0, 0.0001, null)],
     [point(0, 0, null), point(0, 0.0001, 10), point(0, 0.0002, null)],
-  ])('fills missing endpoints using the nearest known elevation', (...points: SourcePoint[]) => {
+  ])('rejects unknown endpoint gaps instead of encoding them as flat terrain', (...points: SourcePoint[]) => {
     const reference = buildReference(source(points));
     const result = processRoute(reference, createStations(reference, []), { ...options, elevationMode: 'interpolate' }, identity);
-    expect(result.route!.elev!.every(node => node.hDm === 100)).toBe(true);
-    expect(result.route!.elevationInfo!.containsFilledValues).toBe(true);
-    expect(result.issues.some(value => value.severity === 'error' || value.code === 'ELEVATION_LARGE_GAP')).toBe(false);
+    expect(result.route).toBeNull();
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'INCOMPLETE_ELEVATION', severity: 'error' }));
+    expect(result.issues.some(value => value.code === 'ELEVATION_FILLED')).toBe(false);
   });
 
   it('fills long gaps by distance and warns without blocking export', () => {
@@ -245,13 +265,16 @@ describe('preprocessing, profile sampling, and quantization', () => {
     expect(decodeRte(encodeRte(result.route!)).elev).toEqual(result.route!.elev);
   });
 
-  it('warns for long endpoint gaps and cannot fill a profile with no known elevation', () => {
+  it('blocks export for long unknown endpoint gaps', () => {
     const reference = buildReference(source([point(0, 0, null), point(0, 0.002, 10), point(0, 0.004, null)]));
     const result = processRoute(reference, createStations(reference, []), { ...options, elevationMode: 'interpolate' }, identity);
-    expect(result.route).not.toBeNull();
-    expect(result.issues.filter(value => value.code === 'ELEVATION_LARGE_GAP')).toHaveLength(2);
+    expect(result.route).toBeNull();
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'INCOMPLETE_ELEVATION', severity: 'error' }));
+  });
+
+  it.each(['source', 'interpolate'] as const)('cannot export an entirely unknown elevation profile in %s mode', (elevationMode) => {
     const unknown = buildReference(source([point(0, 0, null), point(0, 0.001, null)]));
-    const failed = processRoute(unknown, createStations(unknown, []), { ...options, elevationMode: 'interpolate' }, identity);
+    const failed = processRoute(unknown, createStations(unknown, []), { ...options, elevationMode }, identity);
     expect(failed.route).toBeNull();
     expect(failed.issues.some(value => value.code === 'INCOMPLETE_ELEVATION')).toBe(true);
   });
@@ -306,7 +329,7 @@ it('carries optional magnetic metadata through processing and blocks incomplete 
   const stations = createStations(reference, []);
   const magneticDeclination = { declinationCdeg: -350, referenceLatE7: 0, referenceLonE7: 0,
     referenceDate: '2026-10-16', source: 'synthetic' };
-  const result = processRoute(reference, stations, { ...options, elevationMode: 'omit' }, { ...identity, magneticDeclination });
+  const result = processRoute(reference, stations, options, { ...identity, magneticDeclination });
   expect(result.route).not.toBeNull();
   expect(decodeRte(encodeRte(result.route!)).magneticDeclination).toEqual(magneticDeclination);
   const invalid = processRoute(reference, stations, options, { ...identity, magneticDeclination: { ...magneticDeclination, source: '' } });

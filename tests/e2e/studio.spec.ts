@@ -176,8 +176,8 @@ test('interpolates only an explicitly selected short interior elevation gap', as
   await importText(page, gpx([[0, 0, 100], [0, 0.0001, null], [0, 0.0002, 120]]));
   await confirmRoute(page);
   await step(page, 'Elevation');
-  await expect(page.getByRole('radio', { name: /Omit elevation/ })).toBeChecked();
-  await page.getByRole('radio', { name: /Use source elevation/ }).check();
+  await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
+  await expect(page.getByRole('radio', { name: /Omit elevation/ })).toHaveCount(0);
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Review/ })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
@@ -189,17 +189,78 @@ test('interpolates only an explicitly selected short interior elevation gap', as
   expect(exported.route.elev!.at(-1)!.upDm).toBe(200);
 });
 
-test('fills endpoint elevation and warns about long gaps without blocking export', async ({ page }) => {
+test('restores an old elevation-omitting draft with source elevation required', async ({ page }) => {
+  await importText(page, gpx([[0, 0, 100], [0, 0.0001, null], [0, 0.0002, 120]]));
+  await expect(page.getByRole('status', { name: 'Saved on this device', exact: true })).toBeVisible();
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open('trl-x-route-studio');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('drafts', 'readwrite');
+      const store = tx.objectStore('drafts');
+      const current = store.get('current');
+      current.onsuccess = () => {
+        const draft = current.result;
+        draft.editor.options.elevationMode = 'omit';
+        draft.editor.declinationMode = 'manual';
+        draft.editor.magneticDeclination = { declinationCdeg: 0, referenceLatE7: 0, referenceLonE7: 0,
+          referenceDate: '2026-10-16', source: 'legacy observation', referenceHeightDm: 100 };
+        store.put(draft, 'current');
+      };
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    };
+  }));
+  await page.reload();
+  await page.getByRole('button', { name: /Continue editing/ }).click();
+  await confirmRoute(page);
+  await step(page, 'Elevation');
+  await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
+  await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+  const exported = await downloadRoute(page);
+  expect(exported.route.elevationInfo.containsFilledValues).toBe(true);
+  expect(exported.route.magneticDeclination).toMatchObject({ declinationCdeg: 0, source: 'legacy observation' });
+  expect(exported.route.magneticDeclination).not.toHaveProperty('referenceHeightDm');
+});
+
+test('keeps missing endpoint elevation blocked while allowing route previews', async ({ page }) => {
   await importText(page, gpx([[0, 0, null], [0, 0.002, 110], [0, 0.004, null], [0, 0.006, 120]]));
   await confirmRoute(page);
   await step(page, 'Elevation');
   await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
-  await expect(page.locator('.issue[data-code="ELEVATION_LARGE_GAP"]')).toHaveCount(2);
+  await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toContainText('Missing start or finish elevations');
+  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
+  await expect(page.getByRole('slider', { name: 'Route progress', exact: true })).toBeVisible();
+  await page.getByRole('slider', { name: 'Route progress', exact: true }).fill('300');
+});
+
+test('warns about explicitly interpolated long interior gaps and exports a complete profile', async ({ page }) => {
+  await importText(page, gpx([[0, 0, 100], [0, 0.002, null], [0, 0.004, 120]]));
+  await confirmRoute(page);
+  await step(page, 'Elevation');
+  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+  await expect(page.locator('.issue[data-code="ELEVATION_LARGE_GAP"]')).toHaveCount(1);
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled();
   const exported = await downloadRoute(page);
-  expect(exported.route.elev![0].hDm).toBe(1100);
-  expect(exported.route.elevationInfo?.containsFilledValues).toBe(true);
+  expect(exported.route.elev[0].hDm).toBe(1000);
+  expect(exported.route.elev.at(-1)!.hDm).toBe(1200);
+  expect(exported.route.elevationInfo.containsFilledValues).toBe(true);
+});
+
+test('requires corrected source data when every elevation is missing', async ({ page }) => {
+  await importText(page, gpx(complete.map(([lat, lon]) => [lat, lon, null])));
+  await confirmRoute(page);
+  await step(page, 'Elevation');
+  await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
+  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+  await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
+  await expect(page.getByRole('region', { name: 'Interactive route map', exact: true })).toBeAttached();
 });
 
 test('keeps KML altitude uncertainty explicit and records accepted provenance', async ({ page }) => {
@@ -232,7 +293,8 @@ for (const extension of ['gpx', 'kml']) {
       if (await confirm.count()) await confirm.click();
     }
     await step(page, 'Elevation');
-    await page.getByRole('radio', { name: /Omit elevation/ }).check();
+    await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+    if (extension === 'kml') await page.getByRole('checkbox', { name: /I confirm these values/ }).check();
     if (isMobile) {
       if (await page.getByRole('button', { name: 'Profile', exact: true }).isVisible()) await page.getByRole('button', { name: 'Profile', exact: true }).click();
       await expect(page.getByRole('slider', { name: 'Route progress', exact: true })).toBeVisible();
@@ -252,7 +314,10 @@ for (const extension of ['gpx', 'kml']) {
     expect(exported.route.totalSDm).toBeGreaterThan(150_000);
     expect(exported.route.totalSDm).toBeLessThan(300_000);
     expect(exported.route.stations.length).toBeGreaterThan(2);
-    expect(exported.route.elev).toBeUndefined();
+    expect(exported.route.elev.length).toBeGreaterThan(2);
+    expect(exported.route.elev[0].sDm).toBe(0);
+    expect(exported.route.elev.at(-1)!.sDm).toBe(exported.route.totalSDm);
+    expect(exported.route.elevationInfo.containsFilledValues).toBe(true);
   });
 }
 
@@ -342,7 +407,7 @@ test('magnetic declination survives drafts and exports as optional metadata', as
   await expect(page.getByLabel('Declination (°)', { exact: true })).toHaveValue('-3.50');
   await page.getByLabel('Reference date (UTC)', { exact: true }).fill('2026-10-16');
   await page.getByLabel('Model/version or observation source', { exact: true }).fill('synthetic');
-  await page.getByLabel('WGS84 ellipsoid height (m, optional)', { exact: true }).fill('0');
+  await expect(page.getByLabel('WGS84 ellipsoid height (m, optional)', { exact: true })).toHaveCount(0);
   await page.getByLabel('Valid from (UTC, inclusive)', { exact: true }).fill('2026-10-16');
   await page.getByLabel('Valid until (UTC, inclusive)', { exact: true }).fill('2027-10-15');
   await expect(page.getByText('Invalid magnetic declination metadata', { exact: true })).toHaveCount(0);
@@ -354,7 +419,7 @@ test('magnetic declination survives drafts and exports as optional metadata', as
   const output = await downloadRoute(page);
   expect(output.route.magneticDeclination).toEqual({ declinationCdeg: -350,
     referenceLatE7: 0, referenceLonE7: 0, referenceDate: '2026-10-16', source: 'synthetic',
-    referenceHeightDm: 0, validFrom: '2026-10-16', validUntil: '2027-10-15' });
+    validFrom: '2026-10-16', validUntil: '2027-10-15' });
   await step(page, 'Route');
   await page.getByText('Magnetic declination (optional)', { exact: true }).click();
   await page.getByRole('checkbox', { name: 'Include magnetic declination', exact: true }).uncheck();
@@ -385,7 +450,8 @@ test('automatically fetches declination and removes the old value when a subsequ
   await page.getByLabel('Calculation date (UTC)', { exact: true }).fill('2026-10-16');
   await expect(page.getByRole('status').filter({ hasText: 'Reference fetched:' })).toContainText('-7.46°');
   const output = await downloadRoute(page);
-  expect(output.route.magneticDeclination).toMatchObject({ declinationCdeg: -746, source: 'WMM2025 / BGS', referenceDate: '2026-10-16', referenceHeightDm: 0 });
+  expect(output.route.magneticDeclination).toMatchObject({ declinationCdeg: -746, source: 'WMM2025 / BGS', referenceDate: '2026-10-16' });
+  expect(output.route.magneticDeclination).not.toHaveProperty('referenceHeightDm');
   expect(output.route.magneticDeclination).not.toHaveProperty('validUntil');
   expect(requests.at(-1)!.searchParams.get('altitude')).toBe('0');
   online = false;

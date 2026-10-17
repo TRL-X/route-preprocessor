@@ -2,15 +2,15 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CBOR_LIMITS, decodeCbor, encodeCbor } from '../../src/core/cbor';
 import type { CborValue } from '../../src/core/cbor';
-import { convertHeading, queryMagneticDeclination, crc32, decodeRte, encodeRte, queryElevation, RteError, RTE_LIMITS, validateRoute } from '../../src/core/rte';
+import { convertHeading, queryMagneticDeclination, crc32, decodeRte, encodeRte, queryElevation, queryGeometry, RteError, RTE_LIMITS, validateRoute } from '../../src/core/rte';
 import type { RouteData } from '../../src/core/types';
 
-// Read the normative fixtures directly so changes to the maintained spec cannot
-// silently diverge from a second hand-maintained copy of its byte dumps.
-const specification = readFileSync(new URL('../../docs/TRL-X_Route_V1_Specification_ZH_EN.md', import.meta.url), 'utf8');
-const dumps = [...specification.matchAll(/```text\n((?:[0-9a-f]{8}  [^\n]+\n)+)```/g)];
-const vectors = dumps.map(match => Uint8Array.from(match[1].trimEnd().split('\n').flatMap(line =>
-  line.slice(10).split(' ').map(byte => Number.parseInt(byte, 16)))));
+// Pinned upstream Appendix B bytes; see tests/fixtures/specification/README.md.
+const vectors = ['a', 'b', 'c'].map(name => {
+  const dump = readFileSync(new URL(`../fixtures/specification/vector-${name}.hex`, import.meta.url), 'utf8');
+  return Uint8Array.from(dump.trimEnd().split('\n').flatMap(line =>
+    line.slice(10).split(' ').map(byte => Number.parseInt(byte, 16))));
+});
 const [a, b, c] = vectors;
 
 function view(bytes: Uint8Array) { return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); }
@@ -82,26 +82,26 @@ function expectError(fn: () => unknown, code: RteError['code'] = 'invalid') {
 }
 
 describe('normative reference vectors and CRC32', () => {
-  it('finds all three complete reference fixtures in the maintained specification', () => {
+  it('loads all three complete pinned upstream reference fixtures', () => {
     expect(vectors).toHaveLength(3);
-    expect(c.length).toBe(396);
-    expect(view(c).getUint32(44, true)).toBe(0xdae2bb11);
-    expect(a.length).toBe(456);
-    expect(b.length).toBe(332);
-    expect(view(a).getUint32(44, true)).toBe(0xee9c88fb);
-    expect(view(b).getUint32(44, true)).toBe(0x55bbce5c);
+    expect(c.length).toBe(404);
+    expect(view(c).getUint32(44, true)).toBe(0xbb625a01);
+    expect(a.length).toBe(492);
+    expect(b.length).toBe(464);
+    expect(view(a).getUint32(44, true)).toBe(0x9f58f1aa);
+    expect(view(b).getUint32(44, true)).toBe(0x73cfbd2c);
   });
   it('matches the standard empty and 123456789 check values', () => {
     expect(crc32(new Uint8Array())).toBe(0);
     expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xcbf43926);
-    expect(crc32(a, true)).toBe(0xee9c88fb);
-    expect(crc32(b, true)).toBe(0x55bbce5c);
+    expect(crc32(a, true)).toBe(0x9f58f1aa);
+    expect(crc32(b, true)).toBe(0x73cfbd2c);
   });
   it.each([['A', 0], ['B', 1], ['C', 2]] as const)('decodes and exactly reproduces vector %s', (_, index) => {
     const route = decodeRte(vectors[index]);
     expect(route.name).toBe('Test');
     expect(route.totalSDm).toBe(20000);
-    expect(route.revision).toBe(index + 1);
+    expect(route.revision).toBe(index + 8);
     expect(route.routeId).toEqual(Uint8Array.from({ length: 16 }, (_, i) => i + 1));
     expect(route.stations.map(station => station.name)).toEqual(['Start', 'CP1', 'Finish']);
     expect(encodeRte(route)).toEqual(vectors[index]);
@@ -125,7 +125,8 @@ describe('normative reference vectors and CRC32', () => {
     expectError(() => queryElevation(nodes, 20001), 'range');
     expectError(() => queryElevation(nodes, -1), 'range');
     expectError(() => queryElevation(nodes, NaN), 'range');
-    expect(decodeRte(b).elev).toBeUndefined();
+    expect(decodeRte(b).elev).toEqual(nodes);
+    expect(decodeRte(c).elev).toEqual(nodes);
     expectError(() => queryElevation([], 0), 'unavailable');
   });
 });
@@ -156,7 +157,7 @@ describe('container validation even after CRC recomputation', () => {
     ['unmatched record fields', (_: Uint8Array, dv: DataView) => dv.setUint32(104, 0, true)],
     ['incorrect record size', (_: Uint8Array, dv: DataView) => dv.setUint32(104, 11, true)],
     ['record product overflow', (_: Uint8Array, dv: DataView) => { dv.setUint32(104, 0xffffffff, true); dv.setUint32(108, 0xffffffff, true); }],
-    ['nonzero padding', (bytes: Uint8Array) => { bytes[0x142] = 1; }],
+    ['nonzero padding', (bytes: Uint8Array) => { bytes[0x166] = 1; }],
   ] as const)('rejects %s', (_, change) => expectError(() => decodeRte(mutate(change))));
   it('rejects every truncated header and directory prefix', () => {
     for (let length = 0; length < 160; length++) expectError(() => decodeRte(a.slice(0, length)));
@@ -173,6 +174,7 @@ describe('container validation even after CRC recomputation', () => {
     expectError(() => decodeRte(repack(a, entries.filter(entry => entry.type !== 'GEOM'))));
     expectError(() => decodeRte(repack(a, entries.filter(entry => entry.type !== 'GIDX'))));
     expectError(() => decodeRte(repack(a, entries.filter(entry => entry.type !== 'META'))));
+    expectError(() => decodeRte(repack(a, entries.filter(entry => entry.type !== 'ELEV'))));
   });
   it('accepts any section type order when offsets remain sorted', () => {
     const reordered = repack(a, sections(a).reverse());
@@ -213,7 +215,8 @@ describe('extension and version handling', () => {
   it('ignores valid extension values, including low keys inside an extension map', () => {
     const extended = alterMeta(meta => {
       meta.set(129, [null, false, true, -2147483648, 4294967295, '', new Uint8Array(), new Map([[1, 'custom']])]);
-      (meta.get(6) as Map<number, CborValue>).set(65535, 'details');
+      (meta.get(5) as Map<number, CborValue>).set(65535, 'details');
+      meta.set(128, null);
     });
     expect(decodeRte(extended)).toEqual(decodeRte(a));
   });
@@ -221,12 +224,13 @@ describe('extension and version handling', () => {
     const selectors = [
       (m: Map<number, CborValue>) => m,
       (m: Map<number, CborValue>) => m.get(5) as Map<number, CborValue>,
-      (m: Map<number, CborValue>) => m.get(6) as Map<number, CborValue>,
+      (m: Map<number, CborValue>) => m.get(9) as Map<number, CborValue>,
       (m: Map<number, CborValue>) => (m.get(7) as Map<number, CborValue>[])[0],
       (m: Map<number, CborValue>) => (m.get(8) as Map<number, CborValue>[])[0],
     ];
     for (const select of selectors) expectError(() => decodeRte(alterMeta(meta => select(meta).set(127, null))));
-    expectError(() => decodeRte(alterMeta(meta => (meta.get(6) as Map<number, CborValue>).set(4, new Map([[3, 1]])))));
+    expectError(() => decodeRte(alterMeta(meta => meta.set(6, new Map()))));
+    expectError(() => decodeRte(alterMeta(meta => (meta.get(9) as Map<number, CborValue>).set(5, 0))));
   });
   it('reports resource limits distinctly from invalid and unsupported input', () => {
     expectError(() => decodeRte(mutate((_, dv) => dv.setUint16(20, RTE_LIMITS.maxSections + 1, true))), 'resource');
@@ -290,8 +294,8 @@ describe('metadata and cross-section relationships', () => {
     ['nonzero initial ascent', (r: RouteData) => { r.elev![0].upDm = 1; }],
     ['incorrect cumulative ascent', (r: RouteData) => { r.elev![2].upDm = 201; }],
     ['incorrect cumulative descent', (r: RouteData) => { r.elev![2].downDm = 301; }],
-    ['missing elevation metadata', (r: RouteData) => { delete r.elevationInfo; }],
-    ['missing elevation section', (r: RouteData) => { delete r.elev; }],
+    ['missing elevation metadata', (r: RouteData) => { Reflect.deleteProperty(r, 'elevationInfo'); }],
+    ['missing elevation section', (r: RouteData) => { Reflect.deleteProperty(r, 'elev'); }],
     ['duplicate station ID', (r: RouteData) => { r.stations[1].eventId = 1; }],
     ['duplicate start', (r: RouteData) => { r.stations[1].kind = 0; }],
     ['missing finish', (r: RouteData) => { r.stations[2].kind = 2; }],
@@ -303,20 +307,29 @@ describe('metadata and cross-section relationships', () => {
     ['partial stage cache', (r: RouteData) => { r.stages!.pop(); }],
     ['incorrect stage pair', (r: RouteData) => { r.stages![0].toEventId = 3; }],
     ['incorrect stage minimum', (r: RouteData) => { r.stages![0].minHDm = 901; }],
-    ['missing stage maximum', (r: RouteData) => { delete r.stages![0].maxHDm; }],
-    ['incorrect input hash size', (r: RouteData) => { r.preprocessing.inputSha256 = new Uint8Array(31); }],
-    ['invalid elevation grid', (r: RouteData) => { r.preprocessing.parameters = { elevationGridDm: 0 }; }],
+    ['missing stage maximum', (r: RouteData) => { Reflect.deleteProperty(r.stages![0], 'maxHDm'); }],
+    ['missing stage minimum', (r: RouteData) => { Reflect.deleteProperty(r.stages![0], 'minHDm'); }],
+    ['missing complete elevation', (r: RouteData) => { Reflect.deleteProperty(r, 'elev'); Reflect.deleteProperty(r, 'elevationInfo'); }],
   ] as const)('refuses to encode %s', (_, change) => {
     const route = decodeRte(a);
     change(route);
     expectError(() => encodeRte(route));
   });
-  it('accepts a complete optional stage cache without elevation and rejects cached heights', () => {
+  it('omits internal preprocessing provenance from the wire format', () => {
+    const route = decodeRte(a);
+    expect(route.preprocessing).toBeUndefined();
+    route.preprocessing = { tool: 'local', toolVersion: '1', recipeId: 'private', inputSha256: new Uint8Array(32),
+      parameters: { geometryToleranceDm: 0, elevationGridDm: 100 } };
+    expect(encodeRte(route)).toEqual(a);
+    expect(decodeRte(encodeRte(route)).preprocessing).toBeUndefined();
+    const meta = decodeCbor(sections(encodeRte(route)).find(entry => entry.type === 'META')!.bytes) as Map<number, CborValue>;
+    expect(meta.has(6)).toBe(false);
+  });
+  it('accepts an omitted stage cache while still requiring the complete elevation profile', () => {
     const route = decodeRte(b);
-    route.stages = [{ fromEventId: 1, toEventId: 2 }, { fromEventId: 2, toEventId: 3 }];
-    expect(decodeRte(encodeRte(route)).stages).toEqual(route.stages);
-    route.stages[0].minHDm = 0;
-    expectError(() => encodeRte(route));
+    expect(route.stages).toBeUndefined();
+    expect(route.elev).toHaveLength(4);
+    expect(decodeRte(encodeRte(route))).toEqual(route);
   });
   it('accepts valid zero and negative elevations', () => {
     const route = decodeRte(a);
@@ -334,7 +347,7 @@ describe('metadata and cross-section relationships', () => {
     expectError(() => encodeRte(route));
   });
   it('rejects metadata type violations and missing required fields after a fresh CRC', () => {
-    for (const key of [0, 1, 2, 3, 4, 6, 7]) expectError(() => decodeRte(alterMeta(meta => meta.delete(key))));
+    for (const key of [0, 1, 2, 3, 4, 5, 7]) expectError(() => decodeRte(alterMeta(meta => meta.delete(key))));
     expectError(() => decodeRte(alterMeta(meta => meta.set(2, '20000'))));
     expectError(() => decodeRte(alterMeta(meta => meta.set(7, []))));
     expectError(() => decodeRte(alterMeta(meta => (meta.get(5) as Map<number, CborValue>).set(5, 0))));
@@ -368,6 +381,7 @@ describe('geometry index', () => {
     const route = decodeRte(b);
     route.geom = Array.from({ length: 258 }, (_, i) => ({ latE7: 0, lonE7: i * 1000, sDm: i * 100 }));
     route.totalSDm = 25700;
+    route.elev = [{ sDm: 0, hDm: 0, upDm: 0, downDm: 0 }, { sDm: 25700, hDm: 0, upDm: 0, downDm: 0 }];
     route.stations = [route.stations[0], { ...route.stations[2], sDm: 25700 }];
     const encoded = encodeRte(route);
     expect(decodeRte(encoded).geom).toHaveLength(258);
@@ -393,56 +407,96 @@ describe('geometry index', () => {
 
 
 describe('magnetic declination metadata and heading queries', () => {
-  it('implements vector C headings and inclusive applicability dates', () => {
-    const info = decodeRte(c).magneticDeclination!;
-    expect(info).toEqual({ declinationCdeg: -350, referenceLatE7: 0, referenceLonE7: 89832,
-      referenceDate: '2026-10-16', source: 'synthetic', referenceHeightDm: 0,
-      validFrom: '2026-10-16', validUntil: '2027-10-15' });
-    expect(convertHeading(200, info, '2026-10-16', 'true')).toBe(35850);
-    expect(convertHeading(35850, info, '2027-10-15', 'magnetic')).toBe(200);
-    for (const date of ['2026-10-15', '2027-10-16']) expectError(() => queryMagneticDeclination(info, date), 'unavailable');
-    for (const bytes of [a, b]) expectError(() => queryMagneticDeclination(decodeRte(bytes).magneticDeclination, '2026-10-16'), 'unavailable');
-  });
-  it('preserves zero, absent optional fields and unspecified applicability with or without ELEV', () => {
+  it('implements vector A/B headings and inclusive applicability dates', () => {
     for (const bytes of [a, b]) {
-      const route = decodeRte(bytes);
-      route.magneticDeclination = { declinationCdeg: 0, referenceLatE7: -900000000,
-        referenceLonE7: -1800000000, referenceDate: '0001-01-01', source: 'observation' };
-      const info = decodeRte(encodeRte(route)).magneticDeclination!;
-      expect(info).toEqual(route.magneticDeclination);
-      expect(queryMagneticDeclination(info, '9999-12-31')).toEqual({ declinationCdeg: 0, applicability: 'unspecified' });
-      expect(convertHeading(-1, info, '2026-10-16', 'true')).toBe(35999);
-      expect(convertHeading(72000, info, '2026-10-16', 'magnetic')).toBe(0);
+      const info = decodeRte(bytes).magneticDeclination!;
+      expect(info).toEqual({ declinationCdeg: -350, referenceLatE7: 0, referenceLonE7: 89832,
+        referenceDate: '2026-10-16', source: 'synthetic', validFrom: '2026-10-16', validUntil: '2027-10-15' });
+      expect(convertHeading(200, info, '2026-10-16', 'true')).toBe(35850);
+      expect(convertHeading(35850, info, '2027-10-15', 'magnetic')).toBe(200);
+      expect(queryMagneticDeclination(info, '2026-10-16')).toEqual({ declinationCdeg: -350, applicability: 'applicable' });
+      for (const date of ['2026-10-15', '2027-10-16']) {
+        expect(() => queryMagneticDeclination(info, date)).toThrow(expect.objectContaining({ code: 'unavailable', applicability: 'outside_interval' }));
+      }
+      expect(() => queryMagneticDeclination(info)).toThrow(expect.objectContaining({ code: 'unavailable', applicability: 'time_unknown' }));
+      expectError(() => convertHeading(200, info, undefined, 'true'), 'unavailable');
     }
+    for (const date of [undefined, '2026-10-16']) {
+      expect(() => queryMagneticDeclination(decodeRte(c).magneticDeclination, date))
+        .toThrow(expect.objectContaining({ code: 'unavailable', applicability: 'unavailable' }));
+    }
+  });
+  it('preserves zero, absent optional fields and unspecified applicability with or without a trusted date', () => {
+    const route = decodeRte(c);
+    route.magneticDeclination = { declinationCdeg: 0, referenceLatE7: -900000000,
+      referenceLonE7: -1800000000, referenceDate: '0001-01-01', source: 'observation' };
+    const info = decodeRte(encodeRte(route)).magneticDeclination!;
+    expect(info).toEqual(route.magneticDeclination);
+    for (const date of [undefined, '9999-12-31']) {
+      expect(queryMagneticDeclination(info, date)).toEqual({ declinationCdeg: 0, applicability: 'unspecified' });
+    }
+    expect(convertHeading(-1, info, undefined, 'true')).toBe(35999);
+    expect(convertHeading(72000, info, '2026-10-16', 'magnetic')).toBe(0);
   });
   it.each([
     [0, -18001], [0, 18001], [0, '0'], [0, 1.5], [1, 900000001], [2, 1800000000],
     [3, '0000-01-01'], [3, '1900-02-29'], [3, '2026-02-29'], [3, '2026-04-31'],
     [3, '2026-00-01'], [3, '2026-13-01'], [3, '2026-01-00'], [3, '2026-1-01'],
-    [4, ''], [4, '路'.repeat(22)], [5, 2147483648], [6, '2026-10-17'],
+    [4, ''], [4, '路'.repeat(22)], [5, 0], [6, '2026-10-17'],
     [7, '2026-10-15'], [7, '2027-02-29'], [127, null],
   ] as [number, CborValue][])('rejects malformed declination key %s = %s with a valid CRC', (key, value) => {
-    expectError(() => decodeRte(alterMeta(meta => (meta.get(128) as Map<number, CborValue>).set(key, value), c)));
+    expectError(() => decodeRte(alterMeta(meta => (meta.get(9) as Map<number, CborValue>).set(key, value))));
   });
-  it('requires all mandatory fields and paired validity dates, and a map at root key 128', () => {
+  it('requires all mandatory fields and paired validity dates, and a map at root key 9', () => {
     for (const key of [0, 1, 2, 3, 4, 6, 7]) {
-      expectError(() => decodeRte(alterMeta(meta => (meta.get(128) as Map<number, CborValue>).delete(key), c)));
+      expectError(() => decodeRte(alterMeta(meta => (meta.get(9) as Map<number, CborValue>).delete(key))));
     }
-    expectError(() => decodeRte(alterMeta(meta => meta.set(128, null), c)));
+    expectError(() => decodeRte(alterMeta(meta => meta.set(9, null))));
+  });
+  it('ignores arbitrary valid extension key 128 even when it resembles obsolete declination metadata', () => {
+    for (const value of [null, 'safe to ignore', new Map<number, CborValue>([[5, 123], [127, false]])] as CborValue[]) {
+      const extended = alterMeta(meta => meta.set(128, value));
+      expect(decodeRte(extended)).toEqual(decodeRte(a));
+    }
+    const extensionOnly = alterMeta(meta => {
+      meta.set(128, meta.get(9)!);
+      meta.delete(9);
+    });
+    expect(decodeRte(extensionOnly).magneticDeclination).toBeUndefined();
   });
   it('validates dates and ranges before encoding and accepts Gregorian leap years and range endpoints', () => {
-    const route = decodeRte(c);
+    const route = decodeRte(a);
     route.magneticDeclination!.declinationCdeg = NaN;
     expectError(() => encodeRte(route));
     for (const date of ['2000-02-29', '2028-02-29', '0096-02-29', '9999-12-31']) {
-      route.magneticDeclination = { ...decodeRte(c).magneticDeclination!, declinationCdeg: 18000,
-        referenceLatE7: 900000000, referenceLonE7: 1799999999, referenceHeightDm: -2147483648,
+      route.magneticDeclination = { ...decodeRte(a).magneticDeclination!, declinationCdeg: 18000,
+        referenceLatE7: 900000000, referenceLonE7: 1799999999,
         referenceDate: date, validFrom: date, validUntil: date };
       expect(decodeRte(encodeRte(route)).magneticDeclination).toEqual(route.magneticDeclination);
     }
     expectError(() => queryMagneticDeclination(route.magneticDeclination, '2026-02-29'));
     expectError(() => convertHeading(NaN, route.magneticDeclination, '9999-12-31', 'true'), 'range');
-    const extended = alterMeta(meta => (meta.get(128) as Map<number, CborValue>).set(128, new Map([[0, 'custom']])), c);
-    expect(decodeRte(extended)).toEqual(decodeRte(c));
+    const extended = alterMeta(meta => (meta.get(9) as Map<number, CborValue>).set(128, new Map([[0, 'custom']])));
+    expect(decodeRte(extended)).toEqual(decodeRte(a));
+  });
+});
+
+
+describe('reference geometry interpolation', () => {
+  it.each([
+    [20, 28, 24], [179.999, -179.999, -180], [-179.999, 179.999, -180],
+    [-170, 10, -80], [10, -170, -80],
+  ])('interpolates midpoint longitude from %s° to %s° as %s°', (start, end, expected) => {
+    const nodes = [{ latE7: 0, lonE7: Math.round(start * 1e7), sDm: 0 },
+      { latE7: 10000000, lonE7: Math.round(end * 1e7), sDm: 100 }];
+    expect(queryGeometry(nodes, 50)).toEqual({ lat: 0.5, lon: expected });
+    expect(queryGeometry(nodes, 0)).toEqual({ lat: 0, lon: start });
+    expect(queryGeometry(nodes, 100)).toEqual({ lat: 1, lon: end });
+  });
+  it('retains precision between nodes and rejects out-of-range queries', () => {
+    const nodes = decodeRte(a).geom;
+    expect(queryGeometry(nodes, 1).lon).toBeCloseTo(0.00000089832);
+    for (const s of [-1, 20001, NaN, Infinity]) expectError(() => queryGeometry(nodes, s), 'range');
+    expectError(() => queryGeometry([], 0), 'unavailable');
   });
 });

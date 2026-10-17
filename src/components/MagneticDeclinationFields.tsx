@@ -7,7 +7,7 @@ const display = (n: number | undefined, scale: number) => n !== undefined && Num
 
 // Keep incomplete signed/decimal input while editing; quantization must not erase a typed minus sign.
 function NumericField({ label, value, scale, onChange }: {
-  label: string; value?: number; scale: number; onChange: (value: number, empty: boolean) => void;
+  label: string; value?: number; scale: number; onChange: (value: number) => void;
 }) {
   const [raw, setRaw] = useState(() => display(value, scale));
   const editing = useRef(false);
@@ -20,7 +20,7 @@ function NumericField({ label, value, scale, onChange }: {
       setRaw(text);
       const number = text.trim() === '' ? NaN : Number(text);
       const scaled = number * scale;
-      onChange(Number.isFinite(scaled) ? quantize(scaled) : NaN, text === '');
+      onChange(Number.isFinite(scaled) ? quantize(scaled) : NaN);
     }} /></label>;
 }
 
@@ -60,7 +60,6 @@ export default function MagneticDeclinationFields({ value, reference, mode, quer
       </div>
       <label className="field"><span>{t('app.declinationDate')}</span><input type="date" min="0001-01-01" max="9999-12-31" value={value.referenceDate} onChange={e => update({ referenceDate: e.target.value })} /></label>
       <label className="field"><span>{t('app.declinationSource')}</span><input value={value.source} placeholder="WMM2025" onChange={e => update({ source: e.target.value })} /></label>
-      <NumericField label={t('app.declinationHeight')} value={value.referenceHeightDm} scale={10} onChange={(n, empty) => update({ referenceHeightDm: empty ? undefined : n })} />
       <p className="small muted">{t('app.declinationValidityHelp')}</p>
       <div className="field-pair">
         <label className="field"><span>{t('app.declinationValidFrom')}</span><input type="date" min="0001-01-01" max="9999-12-31" value={value.validFrom ?? ''} onChange={e => update({ validFrom: e.target.value || undefined })} /></label>

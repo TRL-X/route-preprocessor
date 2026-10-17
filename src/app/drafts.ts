@@ -1,8 +1,28 @@
+import type { MagneticDeclinationInfo, ProcessingOptions } from '../core/types';
+
 const DB_NAME = 'trl-x-route-studio';
 const DB_VERSION = 2;
 const MAX_REVISION = 0xffffffff;
 
 interface ExportReservation { revision: number; contentHash: string }
+
+type StoredEditorSettings = {
+  options: Omit<ProcessingOptions, 'elevationMode'> & { elevationMode: ProcessingOptions['elevationMode'] | 'omit' };
+  magneticDeclination?: MagneticDeclinationInfo & { referenceHeightDm?: number };
+};
+
+/** Retain edits and identity while upgrading settings from the former draft format. */
+export function migrateDraftEditor<T extends StoredEditorSettings>(editor: T): Omit<T, 'options' | 'magneticDeclination'> & {
+  options: ProcessingOptions; magneticDeclination?: MagneticDeclinationInfo;
+} {
+  const magneticDeclination = editor.magneticDeclination ? { ...editor.magneticDeclination } : undefined;
+  if (magneticDeclination) delete magneticDeclination.referenceHeightDm;
+  return {
+    ...editor,
+    options: { ...editor.options, elevationMode: editor.options.elevationMode === 'omit' ? 'source' : editor.options.elevationMode },
+    magneticDeclination,
+  };
+}
 
 /** Exhaustion is permanent for this identity, rather than a storage failure. */
 export class RevisionExhaustedError extends Error {

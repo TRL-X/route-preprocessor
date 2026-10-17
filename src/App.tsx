@@ -7,7 +7,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { ArrowDownToLine, ArrowLeft, ArrowRight, Check, CheckCircle2, ChevronDown, Circle, FileUp, Flag, Globe2, LoaderCircle, MapPinned, Maximize2, Minimize2, Mountain, Plus, RotateCcw, Route, ShieldCheck, SlidersHorizontal, Trash2, TriangleAlert, Undo2, X } from 'lucide-react';
 import { flowMachine, STEPS, type Step } from './app/flow';
 import { workerTask } from './app/worker-client';
-import { loadDraft, saveDraft, reserveExportRevision, RevisionExhaustedError } from './app/drafts';
+import { loadDraft, saveDraft, reserveExportRevision, RevisionExhaustedError, migrateDraftEditor } from './app/drafts';
 import { positionAt } from './core/process';
 import { fetchRouteDeclination, utcToday } from './core/declination';
 import type { DraftStation, MagneticDeclinationInfo, ImportedFile, ProcessingIssue, ProcessingOptions, ProcessingResult, ReferenceRoute, RouteData } from './core/types';
@@ -28,7 +28,7 @@ type Editor = {
 };
 type Ledger = Record<string, { revision: number; hash: string }>;
 type Draft = { version: 1 | 2; editor: Editor; ledger: Ledger; savedAt: number };
-const DEFAULT_OPTIONS: ProcessingOptions = { geometryToleranceM: 2, elevationIntervalM: 10, smoothingWindowM: 0, elevationMode: 'omit', acceptUncertainElevation: false };
+const DEFAULT_OPTIONS: ProcessingOptions = { geometryToleranceM: 2, elevationIntervalM: 10, smoothingWindowM: 0, elevationMode: 'source', acceptUncertainElevation: false };
 const hex = (bytes: Uint8Array) => Array.from(bytes, v => v.toString(16).padStart(2, '0')).join('');
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const aborted = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
@@ -201,8 +201,7 @@ export default function App() {
       const job = workerTask<{ file: ImportedFile; reference: ReferenceRoute; stations: DraftStation[] }>({ type: 'import', text, fileName: file.name });
       cancelTask.current = job.cancel;
       const data = await job.promise;
-      const complete = data.reference.points.every(p => p.elevation !== null) && !data.reference.elevationUncertain;
-      setEditor({ ...data, declinationMode: 'auto', declinationQueryDate: utcToday(), options: { ...DEFAULT_OPTIONS, elevationMode: complete ? 'source' : 'omit' }, name: data.file.routes[0].name || file.name.replace(/\.(gpx|kml)$/i, ''), routeId: crypto.getRandomValues(new Uint8Array(16)), inputSha256: hash, sourceIndex: 0, reverse: false, startIndex: 0 });
+      setEditor({ ...data, declinationMode: 'auto', declinationQueryDate: utcToday(), options: { ...DEFAULT_OPTIONS }, name: data.file.routes[0].name || file.name.replace(/\.(gpx|kml)$/i, ''), routeId: crypto.getRandomValues(new Uint8Array(16)), inputSha256: hash, sourceIndex: 0, reverse: false, startIndex: 0 });
       setHistory([]); setDraft(null); setCursorS(0); setSelectedStationId(null); setConfirmedRoute(false); setUnlockedStep(1); setExported(null);
       send({ type: 'ROUTE' });
     } catch (e) { if (!aborted(e)) setError(errorText(e)); }
@@ -236,7 +235,7 @@ export default function App() {
   }
   function restoreDraft() {
     if (!draft) return;
-    setEditor(draft.editor); setLedger(draft.ledger ?? {}); setHistory([]); setDraft(null); setConfirmedRoute(false); setUnlockedStep(1); setCursorS(0); send({ type: 'ROUTE' });
+    setEditor(migrateDraftEditor(draft.editor)); setLedger(draft.ledger ?? {}); setHistory([]); setDraft(null); setConfirmedRoute(false); setUnlockedStep(1); setCursorS(0); send({ type: 'ROUTE' });
   }
   async function exportRoute() {
     if (!editor || !route || !ready || fileBusy.current) return;
@@ -288,7 +287,7 @@ export default function App() {
   }
   const handleFile = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void importFile(file); event.target.value = ''; };
   const lastElev = route?.elev?.at(-1);
-  const estimateBytes = route ? 64 + (route.elev ? 96 : 72) + route.geom.length * 12 + (route.elev?.length ?? 0) * 16 + Math.ceil((route.geom.length - 1) / 128) * 32 + route.stations.length * 80 + 256 : 0;
+  const estimateBytes = route ? 64 + 96 + route.geom.length * 12 + (route.elev?.length ?? 0) * 16 + Math.ceil((route.geom.length - 1) / 128) * 32 + route.stations.length * 80 + 256 : 0;
   const selectStation = (id: number) => { setSelectedStationId(id); const station = editor?.stations.find(s => s.id === id); if (station) setCursorS(station.s); go('stations'); };
 
   return <div className={'studio' + (editor && step !== 'import' ? ' studio--editing' : '')}>
@@ -360,10 +359,10 @@ export default function App() {
             </>}
             {step === 'elevation' && <>
               {editor.reference.points.some(p=>p.elevation===null) && <div className="inline-note"><Mountain size={18}/><span>{t('app.missingElevationCount', { count: editor.reference.points.filter(p=>p.elevation===null).length })}</span></div>}
-              <fieldset className="radio-cards"><legend>{t('app.elevationInTheExportedRoute')}</legend>{(['omit','source','interpolate'] as const).map((mode,i)=><label className={'radio-card '+(editor.options.elevationMode===mode?'selected':'')} key={mode}><input type="radio" name="elevation" value={mode} checked={editor.options.elevationMode===mode} onChange={()=>editOptions({elevationMode:mode})}/><span><strong>{[t('app.routeGeometryOnly'),t('app.useSourceElevation'),t('app.fillElevationGaps')][i]}</strong><small>{[t('app.exportWithoutElevationOrClimbStatistics'),t('app.requiresACompleteUsableProfile'),t('app.interpolateElevationGapsDescription')][i]}</small></span></label>)}</fieldset>
-              {editor.reference.elevationUncertain&&editor.options.elevationMode!=='omit'&&<label className="check-field caution"><input type="checkbox" checked={editor.options.acceptUncertainElevation} onChange={e=>editOptions({acceptUncertainElevation:e.target.checked})}/><span>{t('app.iAcceptTheSourceSUncertainElevationReference')}</span></label>}
-              {editor.options.elevationMode!=='omit'&&<><label className="field"><span>{t('app.samplingIntervalM')}</span><select value={editor.options.elevationIntervalM} onChange={e=>editOptions({elevationIntervalM:Number(e.target.value)})}>{[5,10,20,50].map(n=><option key={n} value={n}>{n} m</option>)}</select></label><label className="field"><span>{t('app.smoothingWindowM')}</span><select value={editor.options.smoothingWindowM} onChange={e=>editOptions({smoothingWindowM:Number(e.target.value)})}><option value={0}>{t('app.offPreserveSourceShape')}</option>{[10,30,50].map(n=><option key={n} value={n}>{n} m</option>)}</select><small>{t('app.smoothingChangesCalculatedAscentAndDescentCompareThe')}</small></label></>}
-              {route?.elev&&<label className="check-field"><input type="checkbox" checked={compareSource} onChange={e=>setCompareSource(e.target.checked)}/><span>{t('app.compareOriginalElevation')}</span></label>}<div className="info-card"><ShieldCheck size={18}/><p>{t('app.noElevationIsBetterThanInventedElevationUnknown')}</p></div>
+              <fieldset className="radio-cards"><legend>{t('app.elevationInTheExportedRoute')}</legend>{(['source','interpolate'] as const).map((mode,i)=><label className={'radio-card '+(editor.options.elevationMode===mode?'selected':'')} key={mode}><input type="radio" name="elevation" value={mode} checked={editor.options.elevationMode===mode} onChange={()=>editOptions({elevationMode:mode})}/><span><strong>{[t('app.useSourceElevation'),t('app.fillElevationGaps')][i]}</strong><small>{[t('app.requiresACompleteUsableProfile'),t('app.interpolateElevationGapsDescription')][i]}</small></span></label>)}</fieldset>
+              {editor.reference.elevationUncertain&&<label className="check-field caution"><input type="checkbox" checked={editor.options.acceptUncertainElevation} onChange={e=>editOptions({acceptUncertainElevation:e.target.checked})}/><span>{t('app.iAcceptTheSourceSUncertainElevationReference')}</span></label>}
+              <label className="field"><span>{t('app.samplingIntervalM')}</span><select value={editor.options.elevationIntervalM} onChange={e=>editOptions({elevationIntervalM:Number(e.target.value)})}>{[5,10,20,50].map(n=><option key={n} value={n}>{n} m</option>)}</select></label><label className="field"><span>{t('app.smoothingWindowM')}</span><select value={editor.options.smoothingWindowM} onChange={e=>editOptions({smoothingWindowM:Number(e.target.value)})}><option value={0}>{t('app.offPreserveSourceShape')}</option>{[10,30,50].map(n=><option key={n} value={n}>{n} m</option>)}</select><small>{t('app.smoothingChangesCalculatedAscentAndDescentCompareThe')}</small></label>
+              {route?.elev&&<label className="check-field"><input type="checkbox" checked={compareSource} onChange={e=>setCompareSource(e.target.checked)}/><span>{t('app.compareOriginalElevation')}</span></label>}<div className="info-card"><ShieldCheck size={18}/><p>{t('app.completeElevationRequired')}</p></div>
             </>}
             {step === 'preview' && <>
               <div className="review-summary"><span className="summary-icon"><Route size={24}/></span><h3>{editor.name}</h3><p>{km(totalM)} km · {t('common.stationCount', { count: editor.stations.length })}</p></div>
@@ -373,7 +372,7 @@ export default function App() {
             </>}
             {step === 'export' && <>
               <div className={'export-status '+(ready?'valid':'')}><span>{ready?<ShieldCheck size={30}/>:<TriangleAlert size={30}/>}</span><h3>{ready?t('app.readyForTheTrail'):t('app.aFewDetailsToResolve')}</h3><p>{ready?t('app.yourRouteIsReadyForFinalEncodingAnd'):t(declinationStatus === 'loading' ? 'app.declinationLoading' : processing ? 'app.waitForProcessing' : !confirmedRoute ? 'app.routeConfirmationRequired' : 'app.resolveTheIssuesBelowBeforeDownloadingYourRoute')}</p></div>
-              {!confirmedRoute&&<button className="button button-secondary full-width" onClick={()=>go('route')}>{t('app.confirmRouteAndDirectionFirst')}<ArrowRight size={15}/></button>}<dl className="export-details"><div><dt>{t('app.format')}</dt><dd>TRL-X Route 1.0</dd></div><div><dt>{t('app.revision')}</dt><dd>{currentRevision}</dd></div><div><dt>{t('app.geometryNodes')}</dt><dd>{route ? number(route.geom.length) : '—'}</dd></div><div><dt>{t('app.elevationNodes')}</dt><dd>{route?.elev ? number(route.elev.length) : t('app.notIncluded')}</dd></div><div><dt>{t('app.estimatedSize')}</dt><dd>{route?'~ '+size(estimateBytes):'—'}</dd></div></dl>
+              {!confirmedRoute&&<button className="button button-secondary full-width" onClick={()=>go('route')}>{t('app.confirmRouteAndDirectionFirst')}<ArrowRight size={15}/></button>}<dl className="export-details"><div><dt>{t('app.format')}</dt><dd>TRL-X Route 1.0</dd></div><div><dt>{t('app.revision')}</dt><dd>{currentRevision}</dd></div><div><dt>{t('app.geometryNodes')}</dt><dd>{route ? number(route.geom.length) : '—'}</dd></div><div><dt>{t('app.elevationNodes')}</dt><dd>{route?.elev ? number(route.elev.length) : '—'}</dd></div><div><dt>{t('app.estimatedSize')}</dt><dd>{route?'~ '+size(estimateBytes):'—'}</dd></div></dl>
               <button className="button button-primary full-width export-button" disabled={!ready} onClick={()=>void exportRoute()}><ArrowDownToLine size={18}/>{t('app.downloadRte')}</button>
               {exported&&<div className="success-card"><CheckCircle2 size={20}/><span><strong>{exported.filename}</strong><small>{t('app.exportDetails', { size: size(exported.bytes), revision: number(exported.revision) })}</small></span></div>}
               <button className="text-button full-width" onClick={exportReport}>{t('app.downloadProcessingReport')}<ArrowDownToLine size={14}/></button>

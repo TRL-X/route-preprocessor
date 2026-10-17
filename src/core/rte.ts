@@ -1,6 +1,6 @@
 import { CBOR_LIMITS, decodeCbor, encodeCbor, invalid, resource, RteError, textBytes } from './cbor';
 import type { CborValue } from './cbor';
-import type { ElevationInfo, MagneticDeclinationInfo, ElevNode, GeomNode, PreprocessingInfo, ProfileValue, RouteData, Stage, StationEvent } from './types';
+import type { ElevationInfo, MagneticDeclinationInfo, ElevNode, GeomNode, ProfileValue, RouteData, Stage, StationEvent } from './types';
 
 export { RteError } from './cbor';
 
@@ -75,7 +75,6 @@ export function validateMagneticDeclination(info: MagneticDeclinationInfo): void
   integer(info.referenceLonE7, -LON, LON - 1, 'Declination reference longitude');
   calendarDate(info.referenceDate);
   string(info.source, 64, 'Declination source');
-  if (info.referenceHeightDm !== undefined) integer(info.referenceHeightDm, I32_MIN, I32_MAX, 'Declination reference height');
   if ((info.validFrom === undefined) !== (info.validUntil === undefined)) invalid('Declination validity dates must appear together.');
   if (info.validFrom !== undefined && info.validUntil !== undefined) {
     calendarDate(info.validFrom); calendarDate(info.validUntil);
@@ -83,16 +82,19 @@ export function validateMagneticDeclination(info: MagneticDeclinationInfo): void
   }
 }
 
-/** Returns the stored constant; absence and dates outside a declared interval are unavailable. */
-export function queryMagneticDeclination(info: MagneticDeclinationInfo | undefined, date: string): { declinationCdeg: number; applicability: 'specified' | 'unspecified' } {
-  calendarDate(date);
-  if (info === undefined) throw new RteError('unavailable', 'Magnetic declination is unavailable.');
+/** Uses only a caller-supplied trusted UTC date when an applicability interval is declared. */
+export function queryMagneticDeclination(info: MagneticDeclinationInfo | undefined, date?: string): { declinationCdeg: number; applicability: 'applicable' | 'unspecified' } {
+  if (date !== undefined) calendarDate(date);
+  if (info === undefined) throw new RteError('unavailable', 'Magnetic declination is unavailable.', 'unavailable');
   validateMagneticDeclination(info);
-  if (info.validFrom !== undefined && (date < info.validFrom || date > info.validUntil!)) throw new RteError('unavailable', 'Magnetic declination is unavailable for this date.');
-  return { declinationCdeg: info.declinationCdeg, applicability: info.validFrom === undefined ? 'unspecified' : 'specified' };
+  if (info.validFrom !== undefined) {
+    if (date === undefined) throw new RteError('unavailable', 'Magnetic declination requires a trusted UTC query date.', 'time_unknown');
+    if (date < info.validFrom || date > info.validUntil!) throw new RteError('unavailable', 'Magnetic declination is unavailable for this date.', 'outside_interval');
+  }
+  return { declinationCdeg: info.declinationCdeg, applicability: info.validFrom === undefined ? 'unspecified' : 'applicable' };
 }
 
-export function convertHeading(headingCdeg: number, info: MagneticDeclinationInfo | undefined, date: string, target: 'true' | 'magnetic'): number {
+export function convertHeading(headingCdeg: number, info: MagneticDeclinationInfo | undefined, date: string | undefined, target: 'true' | 'magnetic'): number {
   if (!Number.isFinite(headingCdeg)) throw new RteError('range', 'Heading must be finite.');
   const { declinationCdeg } = queryMagneticDeclination(info, date);
   const value = (headingCdeg % 36000) + (target === 'true' ? declinationCdeg : -declinationCdeg);
@@ -100,43 +102,22 @@ export function convertHeading(headingCdeg: number, info: MagneticDeclinationInf
 }
 
 function decodeMeta(value: CborValue): Omit<RouteData, 'routeId' | 'revision' | 'geom' | 'elev'> {
-  const root = structured(value, [0, 1, 2, 3, 4, 5, 6, 7, 8], 'META');
+  const root = structured(value, [0, 1, 2, 3, 4, 5, 7, 8, 9], 'META');
   const schema = integer(root.get(0), 0, U32, 'META.schema_version');
   if (schema !== 1) throw new RteError('unsupported', `Unsupported META schema ${schema}.`);
   if (integer(root.get(4), 0, U32, 'META.coordinate_ref') !== 1) invalid('META.coordinate_ref must be WGS84 E7 (1).');
   const name = string(root.get(1), 96, 'Route name', true);
   const totalSDm = integer(root.get(2), 1, U32, 'META.total_s_dm');
   const routeKind = integer(root.get(3), 0, 1, 'META.route_kind') as 0 | 1;
-  let elevationInfo: ElevationInfo | undefined;
-  if (root.has(5)) {
-    const info = structured(root.get(5), [0, 1, 2, 3, 4, 5], 'META.elevation');
-    elevationInfo = {
-      source: integer(info.get(0), 0, 4, 'Elevation source') as ElevationInfo['source'],
-      verticalDatum: integer(info.get(1), 0, 3, 'Vertical datum') as ElevationInfo['verticalDatum'],
-      quality: integer(info.get(2), 0, 2, 'Elevation quality') as ElevationInfo['quality'],
-    };
-    if (info.has(3)) elevationInfo.sourceDetail = string(info.get(3), 128, 'Elevation source detail');
-    if (info.has(4)) elevationInfo.datumName = string(info.get(4), 64, 'Elevation datum name');
-    if (info.has(5)) elevationInfo.containsFilledValues = boolean(info.get(5), 'Elevation contains filled values');
-  }
-  const prep = structured(root.get(6), [0, 1, 2, 3, 4], 'META.preprocessing');
-  const preprocessing: PreprocessingInfo = {
-    tool: string(prep.get(0), 64, 'Preprocessing tool'),
-    toolVersion: string(prep.get(1), 32, 'Preprocessing tool version'),
-    recipeId: string(prep.get(2), 64, 'Preprocessing recipe'),
+  const info = structured(root.get(5), [0, 1, 2, 3, 4, 5], 'META.elevation');
+  const elevationInfo: ElevationInfo = {
+    source: integer(info.get(0), 0, 4, 'Elevation source') as ElevationInfo['source'],
+    verticalDatum: integer(info.get(1), 0, 3, 'Vertical datum') as ElevationInfo['verticalDatum'],
+    quality: integer(info.get(2), 0, 2, 'Elevation quality') as ElevationInfo['quality'],
   };
-  if (prep.has(3)) {
-    const hash = prep.get(3);
-    if (!(hash instanceof Uint8Array) || hash.length !== 32) invalid('Input SHA-256 must be exactly 32 bytes.');
-    preprocessing.inputSha256 = hash;
-  }
-  if (prep.has(4)) {
-    const params = structured(prep.get(4), [0, 1, 2], 'Preprocessing parameters');
-    preprocessing.parameters = {};
-    if (params.has(0)) preprocessing.parameters.geometryToleranceDm = integer(params.get(0), 0, U32, 'Geometry tolerance');
-    if (params.has(1)) preprocessing.parameters.elevationGridDm = integer(params.get(1), 1, U32, 'Elevation grid');
-    if (params.has(2)) preprocessing.parameters.elevationSmoothingWindowDm = integer(params.get(2), 0, U32, 'Elevation smoothing window');
-  }
+  if (info.has(3)) elevationInfo.sourceDetail = string(info.get(3), 128, 'Elevation source detail');
+  if (info.has(4)) elevationInfo.datumName = string(info.get(4), 64, 'Elevation datum name');
+  if (info.has(5)) elevationInfo.containsFilledValues = boolean(info.get(5), 'Elevation contains filled values');
   const stationValues = root.get(7);
   array(stationValues, 2, 4096, 'Stations');
   const stations: StationEvent[] = stationValues.map((value, i) => {
@@ -161,49 +142,35 @@ function decodeMeta(value: CborValue): Omit<RouteData, 'routeId' | 'revision' | 
       const stage: Stage = {
         fromEventId: integer(entry.get(0), 1, U32, 'Stage from event ID'),
         toEventId: integer(entry.get(1), 1, U32, 'Stage to event ID'),
+        minHDm: integer(entry.get(2), I32_MIN, I32_MAX, 'Stage minimum elevation'),
+        maxHDm: integer(entry.get(3), I32_MIN, I32_MAX, 'Stage maximum elevation'),
       };
-      if (entry.has(2)) stage.minHDm = integer(entry.get(2), I32_MIN, I32_MAX, 'Stage minimum elevation');
-      if (entry.has(3)) stage.maxHDm = integer(entry.get(3), I32_MIN, I32_MAX, 'Stage maximum elevation');
       return stage;
     });
   }
   let magneticDeclination: MagneticDeclinationInfo | undefined;
-  if (root.has(128)) {
-    const info = structured(root.get(128), [0, 1, 2, 3, 4, 5, 6, 7], 'META.magnetic_declination');
+  if (root.has(9)) {
+    const info = structured(root.get(9), [0, 1, 2, 3, 4, 6, 7], 'META.magnetic_declination');
     magneticDeclination = {
       declinationCdeg: info.get(0) as number, referenceLatE7: info.get(1) as number,
       referenceLonE7: info.get(2) as number, referenceDate: info.get(3) as string, source: info.get(4) as string,
-      ...(info.has(5) ? { referenceHeightDm: info.get(5) as number } : {}),
       ...(info.has(6) ? { validFrom: info.get(6) as string } : {}),
       ...(info.has(7) ? { validUntil: info.get(7) as string } : {}),
     };
     validateMagneticDeclination(magneticDeclination);
   }
-  return { name, totalSDm, routeKind, preprocessing, stations, ...(magneticDeclination ? { magneticDeclination } : {}), ...(elevationInfo ? { elevationInfo } : {}), ...(stages ? { stages } : {}) };
+  return { name, totalSDm, routeKind, stations, elevationInfo, ...(magneticDeclination ? { magneticDeclination } : {}), ...(stages ? { stages } : {}) };
 }
 
 function toMeta(route: RouteData): Map<number, CborValue> {
   object(route, 'Route');
-  object(route.preprocessing, 'Preprocessing');
-  const prep = route.preprocessing;
-  const preprocessing = map([[0, prep.tool], [1, prep.toolVersion], [2, prep.recipeId]]);
-  if (prep.inputSha256 !== undefined) preprocessing.set(3, prep.inputSha256);
-  if (prep.parameters !== undefined) {
-    object(prep.parameters, 'Preprocessing parameters');
-    const p = prep.parameters;
-    const parameters = new Map<number, CborValue>();
-    if (p.geometryToleranceDm !== undefined) parameters.set(0, p.geometryToleranceDm);
-    if (p.elevationGridDm !== undefined) parameters.set(1, p.elevationGridDm);
-    if (p.elevationSmoothingWindowDm !== undefined) parameters.set(2, p.elevationSmoothingWindowDm);
-    preprocessing.set(4, parameters);
-  }
   array(route.stations, 2, 4096, 'Stations');
   const stations = route.stations.map(station => {
     object(station, 'Station');
     return map([[0, station.eventId], [1, station.name], [2, station.shortLabel], [3, station.kind],
       [4, station.stageBoundary], [5, station.sDm], [6, station.actualLatE7], [7, station.actualLonE7]]);
   });
-  const meta = map([[0, 1], [1, route.name], [2, route.totalSDm], [3, route.routeKind], [4, 1], [6, preprocessing], [7, stations]]);
+  const meta = map([[0, 1], [1, route.name], [2, route.totalSDm], [3, route.routeKind], [4, 1], [7, stations]]);
   if (route.elevationInfo !== undefined) {
     object(route.elevationInfo, 'Elevation info');
     const e = route.elevationInfo;
@@ -217,20 +184,16 @@ function toMeta(route: RouteData): Map<number, CborValue> {
     array(route.stages, 1, 4095, 'Stages');
     meta.set(8, route.stages.map(stage => {
       object(stage, 'Stage');
-      const result = map([[0, stage.fromEventId], [1, stage.toEventId]]);
-      if (stage.minHDm !== undefined) result.set(2, stage.minHDm);
-      if (stage.maxHDm !== undefined) result.set(3, stage.maxHDm);
-      return result;
+      return map([[0, stage.fromEventId], [1, stage.toEventId], [2, stage.minHDm], [3, stage.maxHDm]]);
     }));
   }
   if (route.magneticDeclination !== undefined) {
     const d = route.magneticDeclination;
     validateMagneticDeclination(d);
     const info = map([[0, d.declinationCdeg], [1, d.referenceLatE7], [2, d.referenceLonE7], [3, d.referenceDate], [4, d.source]]);
-    if (d.referenceHeightDm !== undefined) info.set(5, d.referenceHeightDm);
     if (d.validFrom !== undefined) info.set(6, d.validFrom);
     if (d.validUntil !== undefined) info.set(7, d.validUntil);
-    meta.set(128, info);
+    meta.set(9, info);
   }
   return meta;
 }
@@ -260,33 +223,29 @@ export function validateRoute(route: RouteData): void {
     geometryDistances.add(node.sDm);
   }
   if (route.geom[0].sDm !== 0 || route.geom[route.geom.length - 1].sDm !== route.totalSDm) invalid('GEOM endpoints must be 0 and S.');
-  if ((route.elev !== undefined) !== (route.elevationInfo !== undefined)) invalid('ELEV and META.elevation must be present together.');
-  let elevationDistances: Set<number> | undefined;
-  if (route.elev !== undefined) {
-    if (!Array.isArray(route.elev) || route.elev.length < 2) invalid('ELEV requires at least two nodes.');
-    if (route.elev.length > RTE_LIMITS.maxElevationNodes) resource('ELEV exceeds the node limit.');
-    elevationDistances = new Set<number>();
-    for (let i = 0; i < route.elev.length; i++) {
-      const node = route.elev[i];
-      object(node, 'ELEV node');
-      integer(node.sDm, 0, route.totalSDm, 'ELEV distance');
-      integer(node.hDm, I32_MIN, I32_MAX, 'ELEV height');
-      integer(node.upDm, 0, U32, 'ELEV ascent');
-      integer(node.downDm, 0, U32, 'ELEV descent');
-      if (i === 0) {
-        if (node.sDm !== 0 || node.upDm !== 0 || node.downDm !== 0) invalid('ELEV must start at 0 with zero ascent and descent.');
-      } else {
-        const previous = route.elev[i - 1];
-        if (node.sDm <= previous.sDm) invalid('ELEV distances must strictly increase.');
-        const delta = node.hDm - previous.hDm;
-        if (node.upDm !== previous.upDm + Math.max(delta, 0) || node.downDm !== previous.downDm + Math.max(-delta, 0)) {
-          invalid('ELEV cumulative ascent/descent equations do not hold.');
-        }
+  const elevationDistances = new Set<number>();
+  if (!Array.isArray(route.elev) || route.elev.length < 2) invalid('ELEV requires at least two nodes.');
+  if (route.elev.length > RTE_LIMITS.maxElevationNodes) resource('ELEV exceeds the node limit.');
+  for (let i = 0; i < route.elev.length; i++) {
+    const node = route.elev[i];
+    object(node, 'ELEV node');
+    integer(node.sDm, 0, route.totalSDm, 'ELEV distance');
+    integer(node.hDm, I32_MIN, I32_MAX, 'ELEV height');
+    integer(node.upDm, 0, U32, 'ELEV ascent');
+    integer(node.downDm, 0, U32, 'ELEV descent');
+    if (i === 0) {
+      if (node.sDm !== 0 || node.upDm !== 0 || node.downDm !== 0) invalid('ELEV must start at 0 with zero ascent and descent.');
+    } else {
+      const previous = route.elev[i - 1];
+      if (node.sDm <= previous.sDm) invalid('ELEV distances must strictly increase.');
+      const delta = node.hDm - previous.hDm;
+      if (node.upDm !== previous.upDm + Math.max(delta, 0) || node.downDm !== previous.downDm + Math.max(-delta, 0)) {
+        invalid('ELEV cumulative ascent/descent equations do not hold.');
       }
-      elevationDistances.add(node.sDm);
     }
-    if (route.elev[route.elev.length - 1].sDm !== route.totalSDm) invalid('ELEV must end at S.');
+    elevationDistances.add(node.sDm);
   }
+  if (route.elev[route.elev.length - 1].sDm !== route.totalSDm) invalid('ELEV must end at S.');
   const ids = new Set<number>();
   const boundaries: StationEvent[] = [];
   let starts = 0;
@@ -305,7 +264,7 @@ export function validateRoute(route: RouteData): void {
     }
     if (event.stageBoundary) {
       if (boundaries.length && event.sDm <= boundaries[boundaries.length - 1].sDm) invalid('Stage boundary distances must strictly increase.');
-      if (!geometryDistances.has(event.sDm) || (elevationDistances && !elevationDistances.has(event.sDm))) {
+      if (!geometryDistances.has(event.sDm) || !elevationDistances.has(event.sDm)) {
         invalid('Stage boundaries must match exact GEOM and ELEV nodes.');
       }
       boundaries.push(event);
@@ -325,20 +284,18 @@ export function validateRoute(route: RouteData): void {
       if (stage.fromEventId !== boundaries[i].eventId || stage.toEventId !== boundaries[i + 1].eventId) {
         invalid('Stage cache has an incorrect boundary pair or order.');
       }
-      if (route.elev) {
-        let minimum = Infinity;
-        let maximum = -Infinity;
-        // Inclusive intervals share their endpoint; each sample is visited at most twice.
-        while (route.elev[elevationIndex].sDm < boundaries[i].sDm) elevationIndex++;
-        while (elevationIndex < route.elev.length && route.elev[elevationIndex].sDm <= boundaries[i + 1].sDm) {
-          const node = route.elev[elevationIndex];
-          minimum = Math.min(minimum, node.hDm);
-          maximum = Math.max(maximum, node.hDm);
-          elevationIndex++;
-        }
-        elevationIndex--;
-        if (stage.minHDm !== minimum || stage.maxHDm !== maximum) invalid('Stage cached elevation extrema are incorrect or missing.');
-      } else if (stage.minHDm !== undefined || stage.maxHDm !== undefined) invalid('Stage elevation extrema must be absent without ELEV.');
+      let minimum = Infinity;
+      let maximum = -Infinity;
+      // Inclusive intervals share their endpoint; each sample is visited at most twice.
+      while (route.elev[elevationIndex].sDm < boundaries[i].sDm) elevationIndex++;
+      while (elevationIndex < route.elev.length && route.elev[elevationIndex].sDm <= boundaries[i + 1].sDm) {
+        const node = route.elev[elevationIndex];
+        minimum = Math.min(minimum, node.hDm);
+        maximum = Math.max(maximum, node.hDm);
+        elevationIndex++;
+      }
+      elevationIndex--;
+      if (stage.minHDm !== minimum || stage.maxHDm !== maximum) invalid('Stage cached elevation extrema are incorrect or missing.');
     }
   }
 }
@@ -404,16 +361,13 @@ export function encodeRte(route: RouteData): Uint8Array {
     view.setInt32(offset + 4, n.lonE7, true);
     view.setUint32(offset + 8, n.sDm, true);
   }));
-  if (route.elev) {
-    const elev = route.elev;
-    sections.push(recordSection('ELEV', 16, elev.length, (view, i, offset) => {
-      const n = elev[i];
-      view.setUint32(offset, n.sDm, true);
-      view.setInt32(offset + 4, n.hDm, true);
-      view.setUint32(offset + 8, n.upDm, true);
-      view.setUint32(offset + 12, n.downDm, true);
-    }));
-  }
+  sections.push(recordSection('ELEV', 16, route.elev.length, (view, i, offset) => {
+    const n = route.elev[i];
+    view.setUint32(offset, n.sDm, true);
+    view.setInt32(offset + 4, n.hDm, true);
+    view.setUint32(offset + 8, n.upDm, true);
+    view.setUint32(offset + 12, n.downDm, true);
+  }));
   const indexCount = Math.ceil((route.geom.length - 1) / 128);
   sections.push(recordSection('GIDX', 32, indexCount, (view, i, offset) => {
     const first = i * 128;
@@ -478,7 +432,7 @@ export function decodeRte(bytes: Uint8Array): RouteData {
   const revision = view.getUint32(40, true);
   if (revision === 0) invalid('RTE revision must be positive.');
   const count = view.getUint16(20, true);
-  if (count < 3) invalid('RTE needs at least three sections.');
+  if (count < 4) invalid('RTE needs at least four sections.');
   if (count > RTE_LIMITS.maxSections) resource('RTE exceeds the directory entry limit.');
   const directoryEnd = 64 + count * 24;
   if (directoryEnd > bytes.length) invalid('Truncated RTE directory.');
@@ -529,16 +483,13 @@ export function decodeRte(bytes: Uint8Array): RouteData {
     const p = geomEntry.offset + i * 12;
     geom.push({ latE7: view.getInt32(p, true), lonE7: view.getInt32(p + 4, true), sDm: view.getUint32(p + 8, true) });
   }
-  let elev: ElevNode[] | undefined;
-  if (directory.has('ELEV')) {
-    const entry = required('ELEV', 16, 2, RTE_LIMITS.maxElevationNodes);
-    elev = [];
-    for (let i = 0; i < entry.count; i++) {
-      const p = entry.offset + i * 16;
-      elev.push({ sDm: view.getUint32(p, true), hDm: view.getInt32(p + 4, true), upDm: view.getUint32(p + 8, true), downDm: view.getUint32(p + 12, true) });
-    }
+  const elevEntry = required('ELEV', 16, 2, RTE_LIMITS.maxElevationNodes);
+  const elev: ElevNode[] = [];
+  for (let i = 0; i < elevEntry.count; i++) {
+    const p = elevEntry.offset + i * 16;
+    elev.push({ sDm: view.getUint32(p, true), hDm: view.getInt32(p + 4, true), upDm: view.getUint32(p + 8, true), downDm: view.getUint32(p + 12, true) });
   }
-  const route: RouteData = { routeId, revision, ...metadata, geom, ...(elev ? { elev } : {}) };
+  const route: RouteData = { routeId, revision, ...metadata, geom, elev };
   validateRoute(route);
   const index = required('GIDX', 32, 1, RTE_LIMITS.maxIndexRecords);
   let nextFirst = 0;
@@ -557,6 +508,32 @@ export function decodeRte(bytes: Uint8Array): RouteData {
   }
   if (nextFirst !== geom.length - 1) invalid('GIDX does not cover every GEOM segment.');
   return route;
+}
+
+/** Queries validated GEOM by reference distance; returned degrees retain interpolation precision. */
+export function queryGeometry(nodes: GeomNode[], sDm: number): { lat: number; lon: number } {
+  if (!nodes || nodes.length < 2) throw new RteError('unavailable', 'This route has no complete geometry.');
+  if (!Number.isFinite(sDm) || sDm < nodes[0].sDm || sDm > nodes[nodes.length - 1].sDm) throw new RteError('range', 'Geometry query is outside the route.');
+  let low = 0;
+  let high = nodes.length - 1;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (nodes[mid].sDm < sDm) low = mid + 1;
+    else high = mid;
+  }
+  const right = nodes[low];
+  if (right.sDm === sDm) return { lat: right.latE7 / 1e7, lon: right.lonE7 / 1e7 };
+  const left = nodes[low - 1];
+  const fraction = (sDm - left.sDm) / (right.sDm - left.sDm);
+  let deltaLon = right.lonE7 - left.lonE7;
+  // Strict comparisons preserve the sign of exact +180° and -180° differences.
+  if (deltaLon > LON) deltaLon -= 2 * LON;
+  if (deltaLon < -LON) deltaLon += 2 * LON;
+  const lon = (left.lonE7 + fraction * deltaLon) / 1e7;
+  return {
+    lat: (left.latE7 + fraction * (right.latE7 - left.latE7)) / 1e7,
+    lon: lon - 360 * Math.floor((lon + 180) / 360),
+  };
 }
 
 /** Queries a validated profile in dm; intermediate values deliberately retain fractions. */

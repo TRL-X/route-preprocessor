@@ -19,12 +19,13 @@ describe('online magnetic declination defaults', () => {
     vi.stubGlobal('fetch', fetcher);
     const info = await fetchRouteDeclination(reference, '2026-10-16');
     expect(info).toEqual({ declinationCdeg: -746, referenceLatE7: 400000000, referenceLonE7: 1160000000,
-      referenceDate: '2026-10-16', source: 'WMM2025 / BGS', referenceHeightDm: 0 });
+      referenceDate: '2026-10-16', source: 'WMM2025 / BGS' });
     const [url, options] = fetcher.mock.calls[0];
     expect(url.origin + url.pathname).toBe(DECLINATION_ENDPOINT);
     expect(Object.fromEntries(url.searchParams)).toEqual({ latitude: '40', longitude: '116', altitude: '0', date: '2026-10-16', format: 'json' });
     expect(options).toMatchObject({ credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' });
     expect(info).not.toHaveProperty('validUntil');
+    expect(info).not.toHaveProperty('referenceHeightDm');
   });
   it('keeps a genuine service zero and rounds negative halves away from zero', async () => {
     for (const [value, expected] of [[0, 0], [-3.125, -313]]) {

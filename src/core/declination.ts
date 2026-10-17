@@ -12,7 +12,7 @@ export function declinationReference(reference: ReferenceRoute, date: string): M
   const lon = quantize(normalizeLongitude(point.lon) * 1e7);
   return { declinationCdeg: 0, referenceLatE7: quantize(point.lat * 1e7),
     referenceLonE7: lon === 1800000000 ? -1800000000 : lon,
-    referenceDate: date, source: 'WMM2025 / BGS', referenceHeightDm: 0 };
+    referenceDate: date, source: 'WMM2025 / BGS' };
 }
 
 /** Any service, network, timeout or validation failure leaves the optional metadata absent. */

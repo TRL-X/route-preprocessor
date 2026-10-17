@@ -33,7 +33,6 @@ export function issuesForStep(issues: readonly ProcessingIssue[], step: Step, op
     if (owner !== 'all' && owner !== step) return false;
     if (owner === 'all') return issue.severity === 'error';
     if (owner === 'elevation') {
-      if (options.elevationMode === 'omit' && issue.code !== 'OPTIONS_INVALID') return false;
       if (issue.code === 'IMPORT_KML_ELEVATION') {
         return !options.acceptUncertainElevation && !issues.some(item => item.code === 'ELEVATION_UNCONFIRMED');
       }
