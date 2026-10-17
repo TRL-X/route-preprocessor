@@ -1,0 +1,4 @@
+tests/fixtures/**/*.gpx
+tests/fixtures/**/*.kml
+tests/fixtures/**/*.hex
+tests/fixtures/**/manifest.json

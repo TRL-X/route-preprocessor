@@ -3,12 +3,49 @@ import { createLocaleInstance, resolveLanguage, type LocaleBundle } from '../../
 import { diagnosticText } from '../../src/i18n/diagnostics';
 import en from '../../src/i18n/locales/en.json';
 import zh from '../../src/i18n/locales/zh.json';
+import { DIAGNOSTIC_CODES } from '../../src/core/diagnostics';
+import { IMPORT_LIMITS, PROCESSING_LIMITS, PROCESSING_RANGES } from '../../src/core/policy';
 
-const bundles = import.meta.glob<LocaleBundle>('../../src/i18n/locales/*.json', { eager: true, import: 'default' });
-const resources = Object.fromEntries(Object.entries(bundles).map(([path, bundle]) => [path.split('/').at(-1)!.replace(/\.json$/, ''), bundle]));
-const placeholders = (text: string) => [...text.matchAll(/{{\s*([^},\s]+)/g)].map(match => match[1]).sort();
+const bundles = import.meta.glob<LocaleBundle>('../../src/i18n/locales/*.json', {
+  eager: true,
+  import: 'default',
+});
+const resources = Object.fromEntries(
+  Object.entries(bundles).map(([path, bundle]) => [
+    path
+      .split('/')
+      .at(-1)!
+      .replace(/\.json$/, ''),
+    bundle,
+  ]),
+);
+const placeholders = (text: string) =>
+  [...text.matchAll(/{{\s*([^},\s]+)/g)].map((match) => match[1]).sort();
 
 describe('language resources', () => {
+  it('provides a message and title for every core diagnostic', () => {
+    for (const code of DIAGNOSTIC_CODES) {
+      expect(en.messages).toHaveProperty([`issues.${code}`]);
+      expect(en.messages).toHaveProperty([`issues.title.${code}`]);
+    }
+  });
+
+  it('renders shared policy limits in help text and diagnostics', () => {
+    const instance = createLocaleInstance(resources, ['en']);
+    expect(instance.t('import.fileLimit')).toContain(
+      `${IMPORT_LIMITS.maxBytes / (1024 * 1024)} MiB`,
+    );
+    expect(diagnosticText(instance, { code: 'PROFILE_RESOURCE_LIMIT' })).toContain(
+      new Intl.NumberFormat('en').format(PROCESSING_LIMITS.maxElevationNodes),
+    );
+    expect(diagnosticText(instance, { code: 'OPTIONS_INVALID' })).toContain(
+      `0–${PROCESSING_RANGES.geometryToleranceM.max} m`,
+    );
+    expect(instance.t('app.interpolateElevationGapsDescription')).toContain(
+      `${PROCESSING_LIMITS.elevationGapWarningM} m`,
+    );
+  });
+
   it('keeps interpolation parameters consistent across every discovered locale', () => {
     for (const bundle of Object.values(bundles)) {
       expect(bundle.label.trim()).not.toBe('');
@@ -16,7 +53,9 @@ describe('language resources', () => {
       for (const [key, value] of Object.entries(bundle.messages)) {
         // Languages may need plural categories absent in English (two, few, many…).
         const base = key.replace(/_(zero|one|two|few|many|other)$/, '');
-        const reference = (en.messages as Record<string, string>)[key] ?? (en.messages as Record<string, string>)[`${base}_other`];
+        const reference =
+          (en.messages as Record<string, string>)[key] ??
+          (en.messages as Record<string, string>)[`${base}_other`];
         expect(reference, key).toBeDefined();
         expect(value.trim(), key).not.toBe('');
         expect(placeholders(value), key).toEqual(placeholders(reference));
@@ -38,37 +77,70 @@ describe('language resources', () => {
     const instance = createLocaleInstance(resources, ['en-US']);
     expect(instance.t('common.stationCount', { count: 1 })).toBe('1 station');
     expect(instance.t('common.stationCount', { count: 2 })).toBe('2 stations');
-    expect(instance.t('issues.STATION_UNCONFIRMED', { name: 'CP <north>' })).toContain('CP <north>');
+    expect(instance.t('issues.STATION_UNCONFIRMED', { name: 'CP <north>' })).toContain(
+      'CP <north>',
+    );
     await instance.changeLanguage('zh');
     expect(instance.t('common.stationCount', { count: 1 })).toBe('1 个站点');
-    expect(instance.t('issues.STATION_UNCONFIRMED', { name: 'CP <north>' })).toBe('请确认“CP <north>”对应的经过位置。');
+    expect(instance.t('issues.STATION_UNCONFIRMED', { name: 'CP <north>' })).toBe(
+      '请确认“CP <north>”对应的经过位置。',
+    );
     expect(instance.t('app.routeName')).toBe(zh.messages['app.routeName']);
   });
 
-  it('translates legacy draft diagnostics and recovers their counts when switching languages', async () => {
+  it('translates structured diagnostic parameters when switching languages', async () => {
     const instance = createLocaleInstance(resources, ['zh']);
-    const legacy = { code: 'DUPLICATE_COORDINATES', message: 'Consecutive duplicate coordinates were merged without changing traversal order. Count: 5.' };
-    expect(diagnosticText(instance, legacy)).toBe('已合并 5 个连续重复坐标，保留经过顺序。');
-    expect(diagnosticText(instance, { code: 'ELEVATION_CONFLICT', message: 'Conflicting elevations at repeated coordinates are marked missing. Count: 1.' })).toContain('1 处重复坐标');
-    expect(diagnosticText(instance, { code: 'ELEVATION_MISSING', message: 'Some route points have no elevation. Count: 8.' })).toBe('8 个有效路线点缺少高程。');
-    expect(diagnosticText(instance, { code: 'INCOMPLETE_ELEVATION', message: 'Only interior gaps of at most 100 m can be filled.' })).toContain('补全缺口后导出');
+    const issue = { code: 'DUPLICATE_COORDINATES', params: { count: 5 } };
+    expect(diagnosticText(instance, issue)).toBe('已合并 5 个连续重复坐标，保留经过顺序。');
+    expect(
+      diagnosticText(instance, { code: 'ELEVATION_CONFLICT', params: { count: 1 } }),
+    ).toContain('1 处重复坐标');
+    expect(diagnosticText(instance, { code: 'ELEVATION_MISSING', params: { count: 8 } })).toBe(
+      '8 个有效路线点缺少高程。',
+    );
+    expect(diagnosticText(instance, { code: 'INCOMPLETE_ELEVATION' })).toContain('补全缺口后导出');
     await instance.changeLanguage('en');
-    expect(diagnosticText(instance, legacy)).toContain('Count: 5.');
+    expect(diagnosticText(instance, issue)).toContain('5');
   });
 
-  it('uses localized summaries for missing legacy parameters and keeps unknown diagnostics readable', () => {
+  it('uses localized summaries for missing parameters and keeps unknown diagnostics readable', () => {
     const instance = createLocaleInstance(resources, ['zh']);
-    expect(diagnosticText(instance, { code: 'ELEVATION_MISSING', message: 'An older unrecognized message.' })).toBe('缺少高程');
-    expect(diagnosticText(instance, { code: 'ROUTE_TOO_SHORT', message: 'The route is too short.' })).toBe(zh.messages['issues.ROUTE_TOO_SHORT']);
-    expect(diagnosticText(instance, { code: 'ELEVATION_MISSING', params: { count: 0 }, message: 'Count: 8.' })).toBe('0 个有效路线点缺少高程。');
-    expect(diagnosticText(instance, { code: 'OTHER', message: 'Additional diagnostic' })).toBe('Additional diagnostic');
+    expect(
+      diagnosticText(instance, {
+        code: 'ELEVATION_MISSING',
+        message: 'An older unrecognized message.',
+      }),
+    ).toBe('缺少高程');
+    expect(diagnosticText(instance, { code: 'ELEVATION_MISSING', message: 'Count: 8.' })).toBe(
+      '缺少高程',
+    );
+    expect(
+      diagnosticText(instance, { code: 'ROUTE_TOO_SHORT', message: 'The route is too short.' }),
+    ).toBe(zh.messages['issues.ROUTE_TOO_SHORT']);
+    expect(
+      diagnosticText(instance, {
+        code: 'ELEVATION_MISSING',
+        params: { count: 0 },
+        message: 'Count: 8.',
+      }),
+    ).toBe('0 个有效路线点缺少高程。');
+    expect(diagnosticText(instance, { code: 'OTHER', message: 'Additional diagnostic' })).toBe(
+      'Additional diagnostic',
+    );
   });
 
   it('supports a third language and missing-message fallback without UI branches', () => {
-    const instance = createLocaleInstance({
-      ...resources,
-      fr: { label: 'Français', direction: 'ltr', messages: { 'app.routeName': 'Nom du parcours' } },
-    }, ['fr-CA']);
+    const instance = createLocaleInstance(
+      {
+        ...resources,
+        fr: {
+          label: 'Français',
+          direction: 'ltr',
+          messages: { 'app.routeName': 'Nom du parcours' },
+        },
+      },
+      ['fr-CA'],
+    );
     expect(instance.resolvedLanguage).toBe('fr');
     expect(instance.t('app.routeName')).toBe('Nom du parcours');
     expect(instance.t('app.chooseRouteFile')).toBe(en.messages['app.chooseRouteFile']);

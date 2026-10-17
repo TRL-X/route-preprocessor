@@ -16,12 +16,11 @@ interface Props {
   cursorS: number | null;
   onCursorChange: (s: number) => void;
   onStationSelect: (id: number) => void;
-  onRouteClick?: (s: number) => void;
-  basemap: boolean;
 }
 
 type Coordinate = [number, number];
-const BASE_STYLE = import.meta.env.VITE_MAP_STYLE_URL || 'https://tiles.openfreemap.org/styles/liberty';
+const BASE_STYLE =
+  import.meta.env.VITE_MAP_STYLE_URL || 'https://tiles.openfreemap.org/styles/liberty';
 const emptyCollection = { type: 'FeatureCollection' as const, features: [] };
 const blankStyle = (): StyleSpecification => ({
   version: 8,
@@ -42,7 +41,11 @@ function unwrap(reference: ReferenceRoute | null): Coordinate[] {
   return result;
 }
 
-function positionAt(reference: ReferenceRoute, coordinates: Coordinate[], distance: number): Coordinate {
+function positionAt(
+  reference: ReferenceRoute,
+  coordinates: Coordinate[],
+  distance: number,
+): Coordinate {
   if (!coordinates.length) return [0, 0];
   let lo = 0;
   let hi = reference.points.length - 1;
@@ -55,8 +58,10 @@ function positionAt(reference: ReferenceRoute, coordinates: Coordinate[], distan
   const j = Math.min(coordinates.length - 1, lo);
   const span = reference.points[j].s - reference.points[i].s;
   const t = span > 0 ? Math.max(0, Math.min(1, (distance - reference.points[i].s) / span)) : 0;
-  return [coordinates[i][0] + (coordinates[j][0] - coordinates[i][0]) * t,
-    coordinates[i][1] + (coordinates[j][1] - coordinates[i][1]) * t];
+  return [
+    coordinates[i][0] + (coordinates[j][0] - coordinates[i][0]) * t,
+    coordinates[i][1] + (coordinates[j][1] - coordinates[i][1]) * t,
+  ];
 }
 
 function source(map: MapLibreMap, id: string) {
@@ -68,86 +73,201 @@ function addLayers(map: MapLibreMap) {
   for (const id of ['route', 'stations', 'cursor', 'directions']) {
     map.addSource(id, { type: 'geojson', data: emptyCollection });
   }
-  map.addLayer({ id: 'route-halo', type: 'line', source: 'route', layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': '#ffffff', 'line-width': 9, 'line-opacity': 0.85 } });
-  map.addLayer({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': '#355b45', 'line-width': 4.5 } });
-  map.addLayer({ id: 'route-hit', type: 'line', source: 'route', paint: { 'line-width': 28, 'line-opacity': 0 } });
-  // A local sprite keeps direction arrows available without a remote font or sprite.
+  map.addLayer({
+    id: 'route-halo',
+    type: 'line',
+    source: 'route',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': '#ffffff', 'line-width': 9, 'line-opacity': 0.85 },
+  });
+  map.addLayer({
+    id: 'route-line',
+    type: 'line',
+    source: 'route',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': '#355b45', 'line-width': 4.5 },
+  });
+  map.addLayer({
+    id: 'route-hit',
+    type: 'line',
+    source: 'route',
+    paint: { 'line-width': 28, 'line-opacity': 0 },
+  });
+  // Draw arrows locally so they remain available when the basemap cannot load.
   if (!map.hasImage('route-arrow')) {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 40;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.strokeStyle = '#f9ffdd'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      ctx.beginPath(); ctx.moveTo(11, 25); ctx.lineTo(20, 15); ctx.lineTo(29, 25); ctx.stroke();
+      ctx.strokeStyle = '#f9ffdd';
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(11, 25);
+      ctx.lineTo(20, 15);
+      ctx.lineTo(29, 25);
+      ctx.stroke();
       map.addImage('route-arrow', ctx.getImageData(0, 0, 40, 40));
     }
   }
-  map.addLayer({ id: 'route-directions', type: 'symbol', source: 'directions', layout: {
-    'icon-image': 'route-arrow', 'icon-size': 0.55, 'icon-rotate': ['get', 'bearing'],
-    'icon-rotation-alignment': 'map', 'icon-allow-overlap': true,
-  } });
-  map.addLayer({ id: 'station-hit', type: 'circle', source: 'stations', paint: { 'circle-radius': 20, 'circle-opacity': 0 } });
-  map.addLayer({ id: 'station-rings', type: 'circle', source: 'stations', paint: {
-    'circle-radius': ['case', ['get', 'selected'], 12, 9], 'circle-color': '#fffdf5',
-    'circle-stroke-width': ['case', ['get', 'selected'], 3, 2],
-    'circle-stroke-color': ['case', ['get', 'selected'], '#789333', '#355b45'],
-  } });
-  map.addLayer({ id: 'station-dots', type: 'circle', source: 'stations', paint: {
-    'circle-radius': ['case', ['get', 'selected'], 6, 4],
-    'circle-color': ['case', ['get', 'selected'], '#badb6e', '#355b45'],
-  } });
-  map.addLayer({ id: 'cursor-glow', type: 'circle', source: 'cursor', paint: { 'circle-radius': 17, 'circle-color': '#cae48b', 'circle-opacity': 0.36 } });
-  map.addLayer({ id: 'cursor-dot', type: 'circle', source: 'cursor', paint: {
-    'circle-radius': 7, 'circle-color': '#d3ed99', 'circle-stroke-width': 3, 'circle-stroke-color': '#355b45',
-  } });
+  map.addLayer({
+    id: 'route-directions',
+    type: 'symbol',
+    source: 'directions',
+    layout: {
+      'icon-image': 'route-arrow',
+      'icon-size': 0.55,
+      'icon-rotate': ['get', 'bearing'],
+      'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true,
+    },
+  });
+  map.addLayer({
+    id: 'station-hit',
+    type: 'circle',
+    source: 'stations',
+    paint: { 'circle-radius': 20, 'circle-opacity': 0 },
+  });
+  map.addLayer({
+    id: 'station-rings',
+    type: 'circle',
+    source: 'stations',
+    paint: {
+      'circle-radius': ['case', ['get', 'selected'], 12, 9],
+      'circle-color': '#fffdf5',
+      'circle-stroke-width': ['case', ['get', 'selected'], 3, 2],
+      'circle-stroke-color': ['case', ['get', 'selected'], '#789333', '#355b45'],
+    },
+  });
+  map.addLayer({
+    id: 'station-dots',
+    type: 'circle',
+    source: 'stations',
+    paint: {
+      'circle-radius': ['case', ['get', 'selected'], 6, 4],
+      'circle-color': ['case', ['get', 'selected'], '#badb6e', '#355b45'],
+    },
+  });
+  map.addLayer({
+    id: 'cursor-glow',
+    type: 'circle',
+    source: 'cursor',
+    paint: { 'circle-radius': 17, 'circle-color': '#cae48b', 'circle-opacity': 0.36 },
+  });
+  map.addLayer({
+    id: 'cursor-dot',
+    type: 'circle',
+    source: 'cursor',
+    paint: {
+      'circle-radius': 7,
+      'circle-color': '#d3ed99',
+      'circle-stroke-width': 3,
+      'circle-stroke-color': '#355b45',
+    },
+  });
 }
 
-function updateRoute(map: MapLibreMap, reference: ReferenceRoute | null, coordinates: Coordinate[]) {
-  source(map, 'route')?.setData(reference && coordinates.length > 1 ? {
-    type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates },
-  } : emptyCollection);
-  const features = reference && reference.totalM > 0 ? Array.from({ length: 8 }, (_, i) => {
-    const s = reference.totalM * ((i + 0.5) / 8);
-    const a = positionAt(reference, coordinates, s);
-    const b = positionAt(reference, coordinates, Math.min(reference.totalM, s + Math.max(5, reference.totalM / 800)));
-    const bearing = Math.atan2((b[0] - a[0]) * Math.cos(a[1] * Math.PI / 180), b[1] - a[1]) * 180 / Math.PI;
-    return { type: 'Feature' as const, properties: { bearing }, geometry: { type: 'Point' as const, coordinates: a } };
-  }) : [];
+function updateRoute(
+  map: MapLibreMap,
+  reference: ReferenceRoute | null,
+  coordinates: Coordinate[],
+) {
+  source(map, 'route')?.setData(
+    reference && coordinates.length > 1
+      ? {
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'LineString', coordinates },
+        }
+      : emptyCollection,
+  );
+  const features =
+    reference && reference.totalM > 0
+      ? Array.from({ length: 8 }, (_, i) => {
+          const s = reference.totalM * ((i + 0.5) / 8);
+          const a = positionAt(reference, coordinates, s);
+          const b = positionAt(
+            reference,
+            coordinates,
+            Math.min(reference.totalM, s + Math.max(5, reference.totalM / 800)),
+          );
+          const bearing =
+            (Math.atan2((b[0] - a[0]) * Math.cos((a[1] * Math.PI) / 180), b[1] - a[1]) * 180) /
+            Math.PI;
+          return {
+            type: 'Feature' as const,
+            properties: { bearing },
+            geometry: { type: 'Point' as const, coordinates: a },
+          };
+        })
+      : [];
   source(map, 'directions')?.setData({ type: 'FeatureCollection', features });
 }
 
 function updateStations(map: MapLibreMap, props: Props, coordinates: Coordinate[]) {
-  source(map, 'stations')?.setData({ type: 'FeatureCollection', features: props.stations.map((station) => ({
-    type: 'Feature', properties: { id: station.id, selected: station.id === props.selectedStationId },
-    geometry: { type: 'Point', coordinates: props.reference ? positionAt(props.reference, coordinates, station.s) : [station.lon, station.lat] },
-  })) });
+  source(map, 'stations')?.setData({
+    type: 'FeatureCollection',
+    features: props.stations.map((station) => ({
+      type: 'Feature',
+      properties: { id: station.id, selected: station.id === props.selectedStationId },
+      geometry: {
+        type: 'Point',
+        coordinates: props.reference
+          ? positionAt(props.reference, coordinates, station.s)
+          : [station.lon, station.lat],
+      },
+    })),
+  });
 }
 
 function updateCursor(map: MapLibreMap, props: Props, coordinates: Coordinate[]) {
-  source(map, 'cursor')?.setData(props.reference && props.cursorS !== null ? {
-    type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: positionAt(props.reference, coordinates, props.cursorS) },
-  } : emptyCollection);
+  source(map, 'cursor')?.setData(
+    props.reference && props.cursorS !== null
+      ? {
+          type: 'Feature',
+          properties: {},
+          geometry: {
+            type: 'Point',
+            coordinates: positionAt(props.reference, coordinates, props.cursorS),
+          },
+        }
+      : emptyCollection,
+  );
 }
 
 function fitRoute(map: MapLibreMap, coordinates: Coordinate[], duration = 450) {
   if (!coordinates.length) return;
   const { clientWidth: width, clientHeight: height } = map.getContainer();
   if (!width || !height) return;
-  let west = Infinity; let east = -Infinity; let south = Infinity; let north = -Infinity;
-  for (const [x, y] of coordinates) { west = Math.min(west, x); east = Math.max(east, x); south = Math.min(south, y); north = Math.max(north, y); }
-  // Fixed 64px top/bottom padding leaves almost no route in a short phone pane.
-  const vertical = Math.min(64, height * .15);
-  const horizontal = Math.min(48, width * .12);
-  map.fitBounds([[west, south], [east, north]], {
-    padding: { top: vertical, bottom: vertical, left: horizontal, right: horizontal },
-    maxZoom: 16, duration,
-  });
+  let west = Infinity;
+  let east = -Infinity;
+  let south = Infinity;
+  let north = -Infinity;
+  for (const [x, y] of coordinates) {
+    west = Math.min(west, x);
+    east = Math.max(east, x);
+    south = Math.min(south, y);
+    north = Math.max(north, y);
+  }
+  // Scale padding to leave room for the route in short panes.
+  const vertical = Math.min(64, height * 0.15);
+  const horizontal = Math.min(48, width * 0.12);
+  map.fitBounds(
+    [
+      [west, south],
+      [east, north],
+    ],
+    {
+      padding: { top: vertical, bottom: vertical, left: horizontal, right: horizontal },
+      maxZoom: 16,
+      duration,
+    },
+  );
 }
 
 export default function RouteMap(props: Props) {
-  const { reference, stations, selectedStationId, cursorS, basemap } = props;
+  const { reference, stations, selectedStationId, cursorS } = props;
   const { t } = useLocale();
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -166,8 +286,16 @@ export default function RouteMap(props: Props) {
     if (!host.current) return;
     let map: MapLibreMap;
     try {
-      map = new MapLibreMap({ container: host.current, style: blankStyle(), center: [15, 25], zoom: 1.5,
-        attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false, renderWorldCopies: true });
+      map = new MapLibreMap({
+        container: host.current,
+        style: blankStyle(),
+        center: [15, 25],
+        zoom: 1.5,
+        attributionControl: { compact: true },
+        dragRotate: false,
+        pitchWithRotate: false,
+        renderWorldCopies: true,
+      });
     } catch {
       setNoWebGL(true);
       return;
@@ -194,51 +322,72 @@ export default function RouteMap(props: Props) {
       if (!map.getLayer('station-hit')) return;
       const hits = map.queryRenderedFeatures(event.point, { layers: ['station-hit', 'route-hit'] });
       const station = hits.find((feature) => feature.layer.id === 'station-hit');
-      if (station) { propsRef.current.onStationSelect(Number(station.properties.id)); return; }
+      if (station) {
+        propsRef.current.onStationSelect(Number(station.properties.id));
+        return;
+      }
       const current = propsRef.current.reference;
       if (!hits.length || !current) return;
       let nearest = Infinity;
       let s = 0;
       const coords = coordinatesRef.current;
       for (let i = 1; i < coords.length; i++) {
-        const a = map.project(coords[i - 1]); const b = map.project(coords[i]);
-        const dx = b.x - a.x; const dy = b.y - a.y;
-        const t = Math.max(0, Math.min(1, ((event.point.x - a.x) * dx + (event.point.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        const a = map.project(coords[i - 1]);
+        const b = map.project(coords[i]);
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const t = Math.max(
+          0,
+          Math.min(
+            1,
+            ((event.point.x - a.x) * dx + (event.point.y - a.y) * dy) / (dx * dx + dy * dy || 1),
+          ),
+        );
         const distance = Math.hypot(event.point.x - a.x - t * dx, event.point.y - a.y - t * dy);
-        if (distance < nearest) { nearest = distance; s = current.points[i - 1].s + t * (current.points[i].s - current.points[i - 1].s); }
+        if (distance < nearest) {
+          nearest = distance;
+          s = current.points[i - 1].s + t * (current.points[i].s - current.points[i - 1].s);
+        }
       }
       propsRef.current.onCursorChange(s);
-      propsRef.current.onRouteClick?.(s);
     });
     map.on('mousemove', (event) => {
       if (!map.getLayer('route-hit')) return;
-      map.getCanvas().style.cursor = map.queryRenderedFeatures(event.point, { layers: ['station-hit', 'route-hit'] }).length ? 'pointer' : '';
+      map.getCanvas().style.cursor = map.queryRenderedFeatures(event.point, {
+        layers: ['station-hit', 'route-hit'],
+      }).length
+        ? 'pointer'
+        : '';
     });
     const observer = new ResizeObserver(() => {
-      // A hidden view has no dimensions. Fit again after a resize or reveal,
-      // without an animation that map.resize() could interrupt halfway through.
+      // Refit after a hidden pane becomes visible; resizing can interrupt animations.
       if (!host.current?.clientWidth || !host.current.clientHeight) return;
       map.resize();
       fitRoute(map, coordinatesRef.current, 0);
     });
     observer.observe(host.current);
-    return () => { clearTimeout(styleTimer.current); observer.disconnect(); map.remove(); mapRef.current = null; };
+    return () => {
+      clearTimeout(styleTimer.current);
+      observer.disconnect();
+      map.remove();
+      mapRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    remoteActive.current = basemap;
+    remoteActive.current = true;
     setUnavailable(false);
     clearTimeout(styleTimer.current);
-    if (basemap) {
-      map.setStyle(BASE_STYLE);
-      styleTimer.current = setTimeout(() => {
-        if (!remoteActive.current) return;
-        remoteActive.current = false; setUnavailable(true); map.setStyle(blankStyle());
-      }, 12000);
-    } else map.setStyle(blankStyle());
-  }, [basemap]);
+    map.setStyle(BASE_STYLE);
+    styleTimer.current = setTimeout(() => {
+      if (!remoteActive.current) return;
+      remoteActive.current = false;
+      setUnavailable(true);
+      map.setStyle(blankStyle());
+    }, 12000);
+  }, []);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -257,60 +406,171 @@ export default function RouteMap(props: Props) {
     if (map?.getSource('cursor')) updateCursor(map, propsRef.current, coordinates);
   }, [reference, coordinates, cursorS, ready]);
 
-  return <div className={`route-map ${!basemap || unavailable || noWebGL ? 'route-map--plain' : ''}`}>
-    <div className="route-map__canvas" ref={host} role="region" aria-label={t('map.interactiveRouteMap')} />
-    {noWebGL && <RouteSketch {...props} coordinates={coordinates} />}
-    <div className="route-map__north" aria-hidden="true"><span>N</span><svg viewBox="0 0 20 24"><path d="M10 1 17 21 10 16 3 21Z" /></svg></div>
-    {!noWebGL && <div className="route-map__controls" aria-label={t('map.mapControls')}>
-      <button type="button" onClick={() => mapRef.current?.zoomIn()} aria-label={t('map.zoomIn')} title={t('map.zoomIn')}>+</button>
-      <button type="button" onClick={() => mapRef.current?.zoomOut()} aria-label={t('map.zoomOut')} title={t('map.zoomOut')}>−</button>
-      <button type="button" onClick={() => mapRef.current && fitRoute(mapRef.current, coordinates)} disabled={!reference} aria-label={t('map.fitEntireRoute')} title={t('map.fitEntireRoute')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/><circle cx="12" cy="12" r="3" /></svg></button>
-    </div>}
-    {(unavailable || noWebGL) && <div className="route-map__status" role="status">{t('map.simpleMapRouteEditingAvailable')}</div>}
-  </div>;
+  return (
+    <div className={`route-map ${unavailable || noWebGL ? 'route-map--plain' : ''}`}>
+      <div
+        className="route-map__canvas"
+        ref={host}
+        role="region"
+        aria-label={t('map.interactiveRouteMap')}
+      />
+      {noWebGL && <RouteSketch {...props} coordinates={coordinates} />}
+      <div className="route-map__north" aria-hidden="true">
+        <span>N</span>
+        <svg viewBox="0 0 20 24">
+          <path d="M10 1 17 21 10 16 3 21Z" />
+        </svg>
+      </div>
+      {!noWebGL && (
+        <div className="route-map__controls" aria-label={t('map.mapControls')}>
+          <button
+            type="button"
+            onClick={() => mapRef.current?.zoomIn()}
+            aria-label={t('map.zoomIn')}
+            title={t('map.zoomIn')}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => mapRef.current?.zoomOut()}
+            aria-label={t('map.zoomOut')}
+            title={t('map.zoomOut')}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onClick={() => mapRef.current && fitRoute(mapRef.current, coordinates)}
+            disabled={!reference}
+            aria-label={t('map.fitEntireRoute')}
+            title={t('map.fitEntireRoute')}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+        </div>
+      )}
+      {(unavailable || noWebGL) && (
+        <div className="route-map__status" role="status">
+          {t('map.basemapUnavailable')}
+        </div>
+      )}
+    </div>
+  );
 }
 
-/** An interactive route sketch also works when a browser cannot create WebGL. */
+/** SVG fallback for browsers without WebGL. */
 function RouteSketch(props: Props & { coordinates: Coordinate[] }) {
   const { t } = useLocale();
   const { reference, coordinates, stations, selectedStationId, cursorS, onStationSelect } = props;
   if (!reference || !coordinates.length) return null;
   const middleLat = coordinates.reduce((sum, p) => sum + p[1], 0) / coordinates.length;
-  const scaleX = Math.cos(middleLat * Math.PI / 180);
+  const scaleX = Math.cos((middleLat * Math.PI) / 180);
   const xs = coordinates.map((p) => p[0] * scaleX);
   const ys = coordinates.map((p) => -p[1]);
-  const minX = xs.reduce((a, b) => Math.min(a, b), Infinity); const maxX = xs.reduce((a, b) => Math.max(a, b), -Infinity);
-  const minY = ys.reduce((a, b) => Math.min(a, b), Infinity); const maxY = ys.reduce((a, b) => Math.max(a, b), -Infinity);
+  const minX = xs.reduce((a, b) => Math.min(a, b), Infinity);
+  const maxX = xs.reduce((a, b) => Math.max(a, b), -Infinity);
+  const minY = ys.reduce((a, b) => Math.min(a, b), Infinity);
+  const maxY = ys.reduce((a, b) => Math.max(a, b), -Infinity);
   const scale = Math.min(700 / (maxX - minX || 1), 380 / (maxY - minY || 1));
-  const xy = (p: Coordinate): Coordinate => [400 + (p[0] * scaleX - (minX + maxX) / 2) * scale, 250 + (-p[1] - (minY + maxY) / 2) * scale];
+  const xy = (p: Coordinate): Coordinate => [
+    400 + (p[0] * scaleX - (minX + maxX) / 2) * scale,
+    250 + (-p[1] - (minY + maxY) / 2) * scale,
+  ];
   const screenPoints = coordinates.map(xy);
   const line = screenPoints.map((p) => p.join(',')).join(' ');
   const cursor = cursorS === null ? null : xy(positionAt(reference, coordinates, cursorS));
-  return <svg className="route-map__sketch" viewBox="0 0 800 500" aria-label={t('map.routePreview')}>
-    <polyline points={line} fill="none" stroke="#fffdf5" strokeWidth="10" strokeLinejoin="round" />
-    <polyline points={line} fill="none" stroke="#355b45" strokeWidth="4" strokeLinejoin="round" />
-    <polyline points={line} fill="none" stroke="transparent" strokeWidth="28" className="route-map__sketch-hit" onClick={(event) => {
-      const svg = event.currentTarget.ownerSVGElement;
-      if (!svg) return;
-      const matrix = svg.getScreenCTM();
-      if (!matrix) return;
-      const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
-      let nearest = Infinity; let distanceS = 0;
-      for (let i = 1; i < screenPoints.length; i++) {
-        const a = screenPoints[i - 1]; const b = screenPoints[i];
-        const dx = b[0] - a[0]; const dy = b[1] - a[1];
-        const t = Math.max(0, Math.min(1, ((point.x - a[0]) * dx + (point.y - a[1]) * dy) / (dx * dx + dy * dy || 1)));
-        const d = Math.hypot(point.x - a[0] - t * dx, point.y - a[1] - t * dy);
-        if (d < nearest) { nearest = d; distanceS = reference.points[i - 1].s + t * (reference.points[i].s - reference.points[i - 1].s); }
-      }
-      props.onCursorChange(distanceS); props.onRouteClick?.(distanceS);
-    }} />
-    {stations.map((station) => {
-      const [x, y] = xy(positionAt(reference, coordinates, station.s));
-      return <g key={station.id} role="button" tabIndex={0} aria-label={station.name} className="route-map__sketch-station" onClick={() => onStationSelect(station.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onStationSelect(station.id); } }}>
-        <circle cx={x} cy={y} r="20" fill="transparent" /><circle cx={x} cy={y} r="8" fill={station.id === selectedStationId ? '#d3ed99' : '#fffdf5'} stroke="#355b45" strokeWidth="3" />
-      </g>;
-    })}
-    {cursor && <circle cx={cursor[0]} cy={cursor[1]} r="7" fill="#d3ed99" stroke="#355b45" strokeWidth="3" pointerEvents="none" />}
-  </svg>;
+  return (
+    <svg className="route-map__sketch" viewBox="0 0 800 500" aria-label={t('map.routePreview')}>
+      <polyline
+        points={line}
+        fill="none"
+        stroke="#fffdf5"
+        strokeWidth="10"
+        strokeLinejoin="round"
+      />
+      <polyline points={line} fill="none" stroke="#355b45" strokeWidth="4" strokeLinejoin="round" />
+      <polyline
+        points={line}
+        fill="none"
+        stroke="transparent"
+        strokeWidth="28"
+        className="route-map__sketch-hit"
+        onClick={(event) => {
+          const svg = event.currentTarget.ownerSVGElement;
+          if (!svg) return;
+          const matrix = svg.getScreenCTM();
+          if (!matrix) return;
+          const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(
+            matrix.inverse(),
+          );
+          let nearest = Infinity;
+          let distanceS = 0;
+          for (let i = 1; i < screenPoints.length; i++) {
+            const a = screenPoints[i - 1];
+            const b = screenPoints[i];
+            const dx = b[0] - a[0];
+            const dy = b[1] - a[1];
+            const t = Math.max(
+              0,
+              Math.min(
+                1,
+                ((point.x - a[0]) * dx + (point.y - a[1]) * dy) / (dx * dx + dy * dy || 1),
+              ),
+            );
+            const d = Math.hypot(point.x - a[0] - t * dx, point.y - a[1] - t * dy);
+            if (d < nearest) {
+              nearest = d;
+              distanceS =
+                reference.points[i - 1].s + t * (reference.points[i].s - reference.points[i - 1].s);
+            }
+          }
+          props.onCursorChange(distanceS);
+        }}
+      />
+      {stations.map((station) => {
+        const [x, y] = xy(positionAt(reference, coordinates, station.s));
+        return (
+          <g
+            key={station.id}
+            role="button"
+            tabIndex={0}
+            aria-label={station.name}
+            className="route-map__sketch-station"
+            onClick={() => onStationSelect(station.id)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onStationSelect(station.id);
+              }
+            }}
+          >
+            <circle cx={x} cy={y} r="20" fill="transparent" />
+            <circle
+              cx={x}
+              cy={y}
+              r="8"
+              fill={station.id === selectedStationId ? '#d3ed99' : '#fffdf5'}
+              stroke="#355b45"
+              strokeWidth="3"
+            />
+          </g>
+        );
+      })}
+      {cursor && (
+        <circle
+          cx={cursor[0]}
+          cy={cursor[1]}
+          r="7"
+          fill="#d3ed99"
+          stroke="#355b45"
+          strokeWidth="3"
+          pointerEvents="none"
+        />
+      )}
+    </svg>
+  );
 }

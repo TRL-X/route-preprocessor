@@ -13,11 +13,10 @@ export interface StageListProps {
   onSelectDistance: (distanceM: number) => void;
 }
 
-
 function stageClimb(route: StageProfile | null, fromId: number, toId: number) {
-  if (!route?.elev) return null;
-  const from = route.stations.find(station => station.eventId === fromId);
-  const to = route.stations.find(station => station.eventId === toId);
+  if (!route) return null;
+  const from = route.stations.find((station) => station.eventId === fromId);
+  const to = route.stations.find((station) => station.eventId === toId);
   if (!from || !to) return null;
   const a = queryElevation(route.elev, from.sDm);
   const b = queryElevation(route.elev, to.sDm);
@@ -29,22 +28,35 @@ function stageClimb(route: StageProfile | null, fromId: number, toId: number) {
 
 export default function StageList({ stations, route, onSelectDistance }: StageListProps) {
   const { t, km, number } = useLocale();
-  const boundaries = stations.filter(station => station.stageBoundary);
-  return <>
-    <div className="section-label">{t('review.stages')}</div>
-    {boundaries.slice(0, -1).map((from, index) => {
-      const to = boundaries[index + 1];
-      const climb = stageClimb(route, from.id, to.id);
-      return <button key={from.id} className="stage-row" onClick={() => onSelectDistance(from.s)}>
-        <span>
-          <strong>{from.shortLabel} <ArrowRight size={12} /> {to.shortLabel}</strong>
-          <small>{from.name} → {to.name}</small>
-          {climb && <small className="stage-climb">
-            ↗ {number(climb.up)} m <span>↘ {number(climb.down)} m</span>
-          </small>}
-        </span>
-        <b>{km(to.s - from.s)}<small> km</small></b>
-      </button>;
-    })}
-  </>;
+  const boundaries = stations.filter((station) => station.stageBoundary);
+  return (
+    <>
+      <div className="section-label">{t('review.stages')}</div>
+      {boundaries.slice(0, -1).map((from, index) => {
+        const to = boundaries[index + 1];
+        const climb = stageClimb(route, from.id, to.id);
+        return (
+          <button key={from.id} className="stage-row" onClick={() => onSelectDistance(from.s)}>
+            <span>
+              <strong>
+                {from.shortLabel} <ArrowRight size={12} /> {to.shortLabel}
+              </strong>
+              <small>
+                {from.name} → {to.name}
+              </small>
+              {climb && (
+                <small className="stage-climb">
+                  ↗ {number(climb.up)} m <span>↘ {number(climb.down)} m</span>
+                </small>
+              )}
+            </span>
+            <b>
+              {km(to.s - from.s)}
+              <small> km</small>
+            </b>
+          </button>
+        );
+      })}
+    </>
+  );
 }

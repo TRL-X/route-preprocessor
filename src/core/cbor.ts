@@ -1,10 +1,16 @@
 /** Restricted deterministic CBOR profile used by TRL-X META (spec §7.1). */
-export type CborValue = number | boolean | null | string | Uint8Array | CborValue[] | Map<number, CborValue>;
+export type CborValue =
+  number | boolean | null | string | Uint8Array | CborValue[] | Map<number, CborValue>;
 export type RteErrorCode = 'invalid' | 'unsupported' | 'resource' | 'unavailable' | 'range';
-export type MagneticApplicability = 'applicable' | 'unspecified' | 'unavailable' | 'outside_interval' | 'time_unknown';
+export type MagneticApplicability =
+  'applicable' | 'unspecified' | 'unavailable' | 'outside_interval' | 'time_unknown';
 
 export class RteError extends Error {
-  constructor(public readonly code: RteErrorCode, message: string, public readonly applicability?: MagneticApplicability) {
+  constructor(
+    public readonly code: RteErrorCode,
+    message: string,
+    public readonly applicability?: MagneticApplicability,
+  ) {
     super(message);
     this.name = 'RteError';
   }
@@ -17,8 +23,12 @@ export const CBOR_LIMITS = Object.freeze({
   maxContainerItems: 100_000,
 });
 
-export function invalid(message: string): never { throw new RteError('invalid', message); }
-export function resource(message: string): never { throw new RteError('resource', message); }
+export function invalid(message: string): never {
+  throw new RteError('invalid', message);
+}
+export function resource(message: string): never {
+  throw new RteError('resource', message);
+}
 
 const utf8Encoder = new TextEncoder();
 // ignoreBOM preserves U+FEFF as data instead of silently consuming a leading BOM.
@@ -31,13 +41,14 @@ export function textBytes(value: string): Uint8Array {
     const c = value.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff) {
       const next = value.charCodeAt(++i);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) invalid('Text contains an unpaired UTF-16 surrogate.');
+      if (!(next >= 0xdc00 && next <= 0xdfff))
+        invalid('Text contains an unpaired UTF-16 surrogate.');
     } else if (c >= 0xdc00 && c <= 0xdfff) invalid('Text contains an unpaired UTF-16 surrogate.');
   }
   return utf8Encoder.encode(value);
 }
 
-/** No generic object conversion: numeric maps make ordering and duplicate checks explicit. */
+/** Numeric map keys make deterministic ordering explicit. */
 export function encodeCbor(value: CborValue): Uint8Array {
   const output: number[] = [];
   let items = 0;
@@ -54,7 +65,8 @@ export function encodeCbor(value: CborValue): Uint8Array {
     if (item === null) output.push(0xf6);
     else if (typeof item === 'boolean') output.push(item ? 0xf5 : 0xf4);
     else if (typeof item === 'number') {
-      if (!Number.isInteger(item) || item < -0x80000000 || item > 0xffffffff) invalid('CBOR integer is outside the allowed range.');
+      if (!Number.isInteger(item) || item < -0x80000000 || item > 0xffffffff)
+        invalid('CBOR integer is outside the allowed range.');
       head(item < 0 ? 1 : 0, item < 0 ? -1 - item : item);
     } else if (typeof item === 'string') {
       const bytes = textBytes(item);
@@ -66,7 +78,8 @@ export function encodeCbor(value: CborValue): Uint8Array {
       head(2, item.length);
       for (const byte of item) output.push(byte);
     } else if (Array.isArray(item)) {
-      if (item.length > CBOR_LIMITS.maxContainerItems) resource('CBOR array exceeds the item limit.');
+      if (item.length > CBOR_LIMITS.maxContainerItems)
+        resource('CBOR array exceeds the item limit.');
       head(4, item.length);
       for (const child of item) write(child, depth + 1);
     } else if (item instanceof Map) {
@@ -74,7 +87,8 @@ export function encodeCbor(value: CborValue): Uint8Array {
       head(5, item.size);
       const entries = [...item.entries()].sort(([a], [b]) => a - b);
       for (const [key, child] of entries) {
-        if (!Number.isInteger(key) || key < 0 || key > 65535) invalid('CBOR map key is outside 0..65535.');
+        if (!Number.isInteger(key) || key < 0 || key > 65535)
+          invalid('CBOR map key is outside 0..65535.');
         write(key, depth + 1);
         write(child, depth + 1);
       }
@@ -131,7 +145,11 @@ export function decodeCbor(bytes: Uint8Array): CborValue {
       offset += n;
       if (major === 2) return raw.slice();
       let decoded: string;
-      try { decoded = utf8Decoder.decode(raw); } catch { return invalid('CBOR text is not valid UTF-8.'); }
+      try {
+        decoded = utf8Decoder.decode(raw);
+      } catch {
+        return invalid('CBOR text is not valid UTF-8.');
+      }
       if (decoded.includes('\0')) invalid('CBOR text contains U+0000.');
       return decoded;
     }

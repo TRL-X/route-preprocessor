@@ -1,27 +1,50 @@
-# 规范来源与兼容性
+# Specification alignment
 
-TRL-X Route 的规范、META CDDL 和参考向量统一托管在 [TRL-X/route-specification](https://github.com/TRL-X/route-specification)。本仓库不维护规范正文副本。
+The binary format, META CDDL and reference vectors are maintained in
+[TRL-X/route-specification](https://github.com/TRL-X/route-specification).
+This repository does not keep a separate copy of the normative specification.
 
-当前实现对齐 [2026-10-17 Initial edition](https://github.com/TRL-X/route-specification/blob/50f585dd92b02cb0bb0de4b4a0be83695f296200/specification.md)，上游提交为 `50f585dd92b02cb0bb0de4b4a0be83695f296200`。文件格式版本仍为 1.0，META schema 仍为 1。
+The implementation targets the
+[2026-10-17 initial edition](https://github.com/TRL-X/route-specification/blob/50f585dd92b02cb0bb0de4b4a0be83695f296200/specification.md),
+commit `50f585dd92b02cb0bb0de4b4a0be83695f296200`, with file format version 1.0 and
+META schema 1. The upstream document is marked Draft.
 
-## 与此前草案的差异
+## Implementation requirements
 
-- `META`、`GEOM`、`ELEV`、`GIDX` 四段全部必需。高程元数据也必需；没有完整剖面时不得导出。
-- 磁偏角由扩展键 128 改为核心键 9，读取器必须解释并验证；磁偏角 map 不再定义参考高度键 5。键 128 按普通扩展忽略。
-- META 不再定义预处理键 6。本应用将参数、工具来源与输入 SHA-256 保留在本地编辑模型和质量报告中，不写入 RTE。
-- 阶段缓存可整体省略；一旦提供，每个阶段都必须包含精确的最低、最高高程。
-- 磁偏角查询明确区分无区间、区间内、区间外和缺少可信 UTC 查询日期。参考日期不得替代缺少的查询日期。
-- 几何插值的原始经差恰为 ±180° 时保留其符号，使反向遍历沿同一路径返回。
+- Every file includes META, GEOM, ELEV and GIDX. Complete elevation and elevation
+  metadata are required for export.
+- Magnetic declination, when present, uses core META key 9 and is validated by the
+  reader.
+- Processing settings and input SHA-256 belong to the local editor and report,
+  rather than RTE metadata.
+- A stage cache may be omitted. If present, it includes every stage and its exact
+  minimum and maximum elevation.
+- Declination queries distinguish an unspecified interval, a date inside or outside
+  the interval, and an unknown query date. A reference date cannot stand in for a
+  missing query date.
+- Geometry interpolation preserves the sign of a longitude difference of exactly
+  ±180 degrees, allowing reversed traversal to retrace the represented path.
 
-旧草案生成的文件可能不满足上述要求。当前读取器不会接受缺少 ELEV、保留键 6 等不合规文件。本应用仍导入 GPX/KML；旧 `.rte` 需要使用源文件重新处理、导出。
+The application imports GPX/KML, not RTE files. Inputs without a complete usable
+profile must be corrected or explicitly interpolated where the policy permits.
 
-恢复旧本地草稿时保留路线身份、站点及处理参数，将旧 `omit` 高程策略迁移为 `source`，移除磁偏角参考高度。缺失高程或未经确认的 KML 高程会要求用户处理后才能继续导出。既有修订号记录保留，重新编码后的内容变化会分配新修订号，避免同一身份与修订号对应不同字节。
+Existing local drafts retain edits and route identity. The small settings
+migration at the storage boundary changes the former elevation omission option to `source` and removes
+obsolete declination height data. Export history is preserved so new content
+receives a new revision instead of reusing an existing identity/revision pair.
+See [draft validation and supported versions](architecture.md#draft-boundary).
 
-## 更新实现
+## Update the implementation
 
-1. 阅读上游规范、CDDL 与变更，固定本次对齐的提交。
-2. 同步编解码、处理与交互规则，更新本页的兼容性说明。
-3. 从该提交的附录 B 更新 [A/B/C 测试向量](../tests/fixtures/specification/README.md)，保持原始字节与来源记录；测试不依赖联网获取规范。
-4. 运行 `npm run typecheck`、`npm test`、`npm run build`；涉及交互时运行 Playwright。
+1. Review the upstream specification, CDDL and changes, then pin the target commit.
+2. Update encoding, decoding, processing and interface rules together. Record the
+   resulting alignment and compatibility changes here.
+3. Copy Appendix B's [A/B/C vectors](../tests/fixtures/specification/README.md) from
+   that commit without modifying their bytes. Keep their source and checksums;
+   tests must run without downloading the specification.
+4. Run `npm run typecheck`, `npm test` and `npm run build`. Run the relevant
+   Playwright tests for interaction changes.
 
-规范正文的修改应提交到独立规范仓库。本仓库的处理默认值和浏览器资源预算见[预处理策略](preprocessing.md)。
+Submit normative format changes to the specification repository. Application
+algorithms, defaults and browser budgets are documented in
+[preprocessing](preprocessing.md).

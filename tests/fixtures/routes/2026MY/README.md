@@ -1,54 +1,53 @@
-# 2026MY 路线测试样例
+# 2026MY route fixtures
 
-来源为用户提供的 `2026MY` 路线目录，导入日期为 2026-10-15。
-8 份文件按原始字节复制，总计 4,083,558 bytes；文件名与内容均未修改。
-[manifest.json](manifest.json)记录文件大小、SHA-256 和原始 XML 数据观测值。
+These eight files were copied unchanged from the user-supplied `2026MY` directory
+on 2026-10-15. They total 4,083,558 bytes. [manifest.json](manifest.json) records
+file sizes, SHA-256 hashes and observations from the original XML.
 
-本目录用于开发与回归测试，位于 Vite 的 `public` 和应用源码目录之外。
-应用运行时代码不应引用这些文件；测试工具可从文件系统读取，浏览器测试可通过
-文件选择控件上传。目录位置不影响 Git 仓库本身的访问权限。
+The files are regression inputs outside the application source and Vite's
+`public` directory. Runtime code must not import them. Unit tests read them from
+the filesystem; browser tests upload them through the file picker.
 
-## 样例概况
+## Source observations
 
-每份文件包含一条轨迹段或 LineString。下表均为原始数据计数，尚未清洗、
-量化、简化或验证其地理真实性。
+Each file contains one track segment or LineString. Counts below describe the raw
+input before cleanup, quantization or simplification; they do not verify geographic
+accuracy.
 
-| 路线组 | 每份文件点数 | GPX / KML 地标数 | GPX 缺失高程点数 | GPX / KML 同坐标高程冲突对数 |
-|---|---:|---:|---:|---:|
-| EMY20K | 1,898 | 3 / 5 | 8 | 1 / 6 |
-| MMY50K | 6,749 | 6 / 8 | 10 | 1 / 9 |
-| DMY100K | 6,588 | 10 / 12 | 17 | 0 / 5 |
-| UMY100M | 12,324 | 16 / 18 | 47 | 12 / 23 |
+| Group   | Points per file | GPX / KML landmarks | GPX points without elevation | GPX / KML conflicting-height pairs |
+| ------- | --------------: | ------------------: | ---------------------------: | ---------------------------------: |
+| EMY20K  |           1,898 |               3 / 5 |                            8 |                              1 / 6 |
+| MMY50K  |           6,749 |               6 / 8 |                           10 |                              1 / 9 |
+| DMY100K |           6,588 |             10 / 12 |                           17 |                              0 / 5 |
+| UMY100M |          12,324 |             16 / 18 |                           47 |                            12 / 23 |
 
-文件名中的距离标签不是计算所得里程。相同路线组的 GPX/KML 虽然点数相同，
-其坐标精度、高程和地标表达可能不同，不能假定两者应生成完全相同的 RTE 字节。
+Distance labels in filenames are not calculated route lengths. GPX/KML pairs may
+have equal point counts while differing in coordinate precision, heights and
+landmarks, so they need not produce identical RTE bytes.
 
-## 观测值口径
+The manifest uses these definitions:
 
-- `segment_point_counts`：按源文件顺序，统计每个 GPX `trkseg` / `rte`
-  或 KML `LineString` 的坐标点数，不连接段。
-- `landmark_count`：GPX 的 `wpt` 数或 KML 的 `Point` 数，未合并重复地标。
-- `missing_elevation_count`：未提供高程字段的轨迹点数，零与负值不算缺失。
-- `candidate_elevation_min_m` / `candidate_elevation_max_m`：源文件数值范围，
-  不代表已验证的路线地面高程。
-- `consecutive_same_coordinate_pairs`：同一段中相邻经纬度数值完全相同的点对，
-  比较发生在 E7 量化前，不进行全局去重。
-- `same_coordinate_elevation_conflict_pairs`：上述点对中，两点均有高程且数值
-  不同的数量，未设置差值阈值，不把缺失值当作零。
-- `line_altitude_modes`：KML 各 LineString 直接声明的高度模式，`null` 表示未声明。
-  本组 KML 均未声明；第三列先作为候选高程保存，具体采用策略由预处理规则决定。
+| Field                                                    | Definition                                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `segment_point_counts`                                   | Coordinate counts per GPX `trkseg`/`rte` or KML `LineString`, in source order, without joining segments |
+| `landmark_count`                                         | Number of GPX `wpt` or KML `Point` elements, including duplicates                                       |
+| `missing_elevation_count`                                | Track points without a height value; zero and negative values remain valid                              |
+| `candidate_elevation_min_m`, `candidate_elevation_max_m` | Source height range, without asserting that values describe ground elevation                            |
+| `consecutive_same_coordinate_pairs`                      | Adjacent pairs with equal numeric latitude/longitude, before E7 quantization                            |
+| `same_coordinate_elevation_conflict_pairs`               | Those pairs where both heights exist and differ, with no difference threshold                           |
+| `line_altitude_modes`                                    | Direct KML LineString altitude-mode declarations; `null` means absent                                   |
 
-## 后续测试覆盖
+These KML files do not declare altitude modes. Their third coordinate values
+remain candidate heights until accepted under the
+[preprocessing policy](../../../../docs/preprocessing.md).
 
-这些样例用于验证真实输入兼容性与异常提示，不是已清洗的正确输出：
+## Regression expectations
 
-- GPX 缺失高程应被识别；不能将缺失值编码为平地。
-- 重复坐标和高程冲突应先记录问题，再按明确策略处理。
-- KML 的地标顺序与名称不能决定沿线事件顺序；名称中的换行与边缘空白
-  需要按字段清洗规则处理，保留原始名称用于追溯。
-- 重复起终点地标应与路线的起点、终点事件分别建模。
-- 同组格式分别覆盖解析与导出；完整高程无法形成时，应允许明确选择导出
-  无 ELEV 的合规路线。
+Tests cover missing elevation, repeated coordinates, height conflicts, name
+cleanup, endpoint landmarks and event ordering by route distance. GPX/KML pairs
+are processed independently. Incomplete profiles must block export unless explicit
+interpolation can fill internal gaps; complete ELEV is always required.
 
-manifest 仅记录字节身份与原始观测。测试框架与预处理器实现后，再增加算法输出
-断言、RTE 合规验证及交互测试；本次未把观测值作为完整预处理正确性的证明。
+The manifest identifies the source bytes and observations. Algorithm expectations
+and RTE validation belong in tests. Preserve fixture bytes when changing tests or
+documentation.

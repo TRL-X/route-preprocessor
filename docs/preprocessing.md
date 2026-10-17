@@ -1,97 +1,222 @@
-# 路线预处理策略
+# Preprocessing policy
 
-本文记录当前应用的处理选择，代码入口为 [`src/core/import.ts`](../src/core/import.ts) 与 [`src/core/process.ts`](../src/core/process.ts)。二进制布局和必须满足的语义以独立仓库的 [TRL-X Route 1.0 规范](https://github.com/TRL-X/route-specification/blob/main/specification.md) 为准。当前对齐版本见[兼容性说明](specification.md)。下面的默认值、插值范围和浏览器预算属于应用策略，不扩大格式允许的数据范围。
+This document describes application behavior in `src/core/import.ts` and
+`src/core/process.ts`. Binary layout and required semantics are defined by the
+[pinned TRL-X Route specification](specification.md). Defaults, interpolation
+choices and browser budgets are application policy and cannot relax format
+requirements.
 
-## 输入与连续段
+`src/core/policy.ts` defines shared defaults, parameter ranges, control choices and
+import/processing budgets. The interface uses those definitions; common controls
+may intentionally expose a narrower range than the core accepts.
 
-`parseRouteFile(xml, fileName)` 使用 `fast-xml-parser`，识别 GPX/KML 根元素和 XML 命名空间，不依赖浏览器 DOM。GPX 的每个 `trkseg`、每条 `rte` 和 KML 的每个 `LineString` 都成为独立的 `SourceRoute`。不足两个点的段被忽略并提示；不同段不会自动拼接。GPX `wpt` 与 KML `Point` 成为待关联的 `SourceLandmark`。
+## Input and continuous segments
 
-纬度必须位于 `[-90,90]`，源经度必须位于 `[-180,180]`，坐标和提供的高程必须为有限数值。高程缺失保存为 `null`，零与负值保留。名称去除控制字符、合并空白、去除边缘空白并作 Unicode NFC 规范化；不会按名称中的 CP 编号重排路线。导出前另行检查 UTF-8 字节长度。导入文本仅作数据处理，不作为 HTML 渲染。
+`parseRouteFile(xml, fileName)` uses `fast-xml-parser`, without the browser DOM.
+Each GPX `trkseg` or `rte` and each KML `LineString` becomes a separate
+`SourceRoute`. Segments with fewer than two points are skipped with a warning;
+segments are never joined automatically. GPX `wpt` and KML `Point` elements become
+`SourceLandmark` values for matching.
 
-DOCTYPE、实体声明、非标准实体引用、多个根元素及非法 XML 被拒绝。XML 预定义实体和数值字符引用可用于合法文本。
+Latitude must be in `[-90, 90]`, source longitude in `[-180, 180]`, and supplied
+coordinates and heights must be finite. Missing height is `null`; zero and
+negative heights are valid. Labels have control characters removed, whitespace
+collapsed, edges trimmed and Unicode normalized to NFC. Names and CP numbers do
+not reorder points. UTF-8 byte limits are checked before export. Imported text is
+displayed as plain text.
 
-| 浏览器导入预算 | 当前值 |
-|---|---:|
-| 单文件 | 20 MiB |
-| 全文件轨迹点 | 200,000 |
-| 可选路线段 | 256 |
-| 输入地标 | 4,096 |
-| XML 嵌套深度 | 64 |
-| XML 标签扫描预算 | 1,500,000 |
+DOCTYPE, entity declarations, unsupported entity references, multiple roots and
+invalid XML are rejected. Predefined XML entities and numeric character references
+are allowed.
 
-这些上限分别由 `IMPORT_LIMITS` 和 XML 防护检查实施。导出站点上限另按 RTE 检查，包含系统建立的起终点事件。
+| Import budget                |     Limit |
+| ---------------------------- | --------: |
+| File size                    |    20 MiB |
+| Route points across the file |   200,000 |
+| Selectable route segments    |       256 |
+| Input landmarks              |     4,096 |
+| XML nesting depth            |        64 |
+| Scanned XML tags             | 1,500,000 |
 
-## 基准里程与方向
+`IMPORT_LIMITS` and XML guards enforce these budgets. The exported event limit is
+separate and includes generated start and finish events.
 
-`buildReference(source, { reverse, startIndex })` 建立 `ReferenceRoute`。处理顺序是：按需改变闭合路线起点、反转方向、合并连续重复坐标、累计水平距离。非相邻的重合点保留，因此折返、交叉和重复经过同一地点不会被全局去重。
+## Reference distance and direction
 
-水平距离采用球面大圆距离（haversine），球半径固定为 **6,371,008.8 m**，输入坐标为 WGS84，经度差按最短的跨日期变更线方向归一化。这是明确的距离近似模型，没有使用 WGS84 椭球测地线解算，也不是地图 Web Mercator 平面距离。高度不参与水平里程计算。
+`buildReference(source, { reverse, startIndex })` changes the closed-route start
+if requested, reverses direction if requested, merges consecutive duplicate
+coordinates and accumulates horizontal distance. Nonconsecutive repeated points
+remain, preserving crossings, out-and-back sections and repeated visits.
 
-在几何简化前得到每个有效点的累计 `s`，全长为 `totalM`。后续几何、高程、站点都使用同一条里程轴。简化后的弦长可能更短，不能据此替换基准里程；否则站点位置、阶段长度和累计升降查询会互相错位。`positionAt(reference, s)` 按相邻参考点的里程比例插值经纬度，跨日期变更线时处理经度环绕，经差恰为 ±180° 时保留原符号，超范围查询抛错。`queryGeometry` 对编码后的节点采用相同插值规则。
+Distance uses the haversine formula with a fixed radius of **6,371,008.8 m** and
+the shortest wrapped longitude difference. This spherical approximation uses
+WGS84 input coordinates; it is neither an ellipsoidal geodesic solution nor a
+Web Mercator measurement. Elevation does not contribute to horizontal distance.
 
-只有源首末坐标完全相同的路线被识别为显式闭合环线。不会按接近距离自动闭合，也不会添加隐含的末点至首点连线。`startIndex` 指向原始源点索引，`ReferencePoint.sourceIndex` 用于界面从游标选择最近源点；闭合末点索引映射回 0。调整环线起点时保留原闭合接缝的两次观测，接缝高程冲突仍会进入缺失处理。反转在起点调整之后执行。
+Each reference point receives cumulative distance `s` before simplification. Its
+final value is `totalM`. Geometry, elevation and stations share this distance
+axis; simplified chord lengths must not replace it. `positionAt(reference, s)`
+interpolates latitude and longitude by reference-distance fraction, wraps
+longitude at the antimeridian and rejects out-of-range distances. A longitude
+difference of exactly ±180 degrees keeps its sign. `queryGeometry` applies the
+same interpolation rule to encoded nodes.
 
-连续重复坐标的高程只要存在缺失或冲突，合并点就保持未知，不从其中任意挑一个数值。问题记录在 `ReferenceRoute.issues`。相邻源点超过 1 km 会产生警告，提示核对连接；这不自动证明存在断点。应用要求用户检查路线与方向后才能下载。
+A route is closed only when it has at least three points and its first and last
+normalized coordinates match.
+Nearby endpoints are not snapped together, and no closing edge is added.
+`startIndex` refers to the original source point. `ReferencePoint.sourceIndex`
+lets the interface select it from the cursor; the closing duplicate maps to
+index 0. Moving the start preserves both observations at the original seam so
+height conflicts remain detectable. Reversal follows the start adjustment.
 
-## 站点与多次经过
+Merged consecutive duplicates retain an unknown height if any observation is
+missing or contradictory. Issues are recorded on `ReferenceRoute.issues`.
+Adjacent source points more than 1 km apart produce a warning to check their
+connection. Users must review and confirm the route and direction before export.
 
-`matchLandmark(reference, landmark)` 对参考线段进行局部平面投影，并以地标至投影点的球面距离比较候选。候选须为局部最小值，并处于最近候选距离加 20 m 的范围内；沿线相隔不足 20 m 的相近候选合并，最多返回 32 个候选，按距离、再按里程排序。这些是关联启发式，不构成测量精度保证。
+## Stations and repeated visits
 
-`createStations(reference, landmarks)` 创建起终点并关联输入地标。只有一个候选且偏离不超过 50 m 的普通地标可以自动确认；多次经过或较大偏离需要用户确认。距端点 100 m 内、名称明确表示起点或终点的地标可用于对应端点；重复导入的命名起终点不额外生成 POI。反转开放路线时相应交换端点用途。同坐标的起点和终点始终是两个不同事件。
+`matchLandmark` projects a landmark onto reference segments in a local plane,
+then compares candidates by great-circle distance. Candidates must be local
+minima whose offset is at most 20 m greater than the nearest offset. Nearby candidates less than
+20 m apart along the route are merged. At most 32 are returned, ordered by offset
+and then route distance. These are matching heuristics, not accuracy guarantees.
 
-导出按 `(s_dm, event_id)` 排序，不以 CP 编号或输入地标顺序决定经过次序。`processRoute` 检查：
+`createStations` creates start and finish events and matches imported landmarks.
+A single candidate within 50 m can be confirmed automatically; ambiguous or more
+distant matches require confirmation. A landmark within 100 m of an endpoint
+whose name identifies it as a start or finish may supply that endpoint's name
+without adding another POI. Endpoint roles swap when an open route is reversed.
+Start and finish remain distinct events even at the same coordinate.
 
-- 事件 ID 是非零 `u32`，文件内唯一；事件总数为 2–4,096。
-- 恰好一个 start 和 finish，分别位于事件数组首末、里程 0 和 `S`，且均为阶段边界。
-- 所有待确认站点均已确认，名称为 1–96 UTF-8 字节，短标签为 1–16 UTF-8 字节。
-- 阶段边界在分米量化后严格递增，且在 `GEOM` 与 `ELEV` 中均有精确对应的里程节点。
+Events are ordered by `(s_dm, event_id)`, independent of CP numbers or source
+landmark order. `processRoute` requires:
 
-同一里程上的普通事件可以存在，但两个阶段边界不能重合。冲突时要求调整里程或取消其中的阶段划分，不悄悄移动站点。
+- Unique, nonzero `u32` event IDs and 2–4,096 events.
+- Exactly one start and finish, first and last in event order, at 0 and `S`, both
+  marked as stage boundaries.
+- Confirmed stations, names of 1–96 UTF-8 bytes and short labels of 1–16 bytes.
+- Strictly increasing stage-boundary distances after decimeter quantization,
+  with exact distance nodes in both GEOM and ELEV.
 
-## 几何简化与量化
+Ordinary events may share a distance; stage boundaries may not. Conflicts require
+editing the distance or clearing a boundary rather than silently moving it.
 
-界面默认几何容差是 **2 m**。核心可接受 0–1,000 m；界面提供的编辑范围更窄。算法是带约束的 Douglas–Peucker 简化，阶段边界和首末节点强制保留，同时限制侧向偏差和里程插值误差。里程误差阈值为 `max(2 m, geometryToleranceM)`。
+## Geometry and quantization
 
-简化前对超过 **250 m** 的参考里程跨度沿原表示的线段细分；简化过程也以 250 m 为跨度保护，避免很长的线段掩盖沿线进度。细分不增加源数据精度，也不重算里程。生成阶段的几何工作点预算为 400,000。坐标及里程量化后的相邻节点消解可能引入分辨率级差异。
+The default geometry tolerance is **2 m**. Core accepts 0–1,000 m; the interface
+limits editing to 0–50 m. Constrained Douglas–Peucker simplification preserves
+endpoints and stage boundaries while limiting lateral deviation and progress
+interpolation error. The latter threshold is `max(2 m, geometryToleranceM)`.
 
-全部整数采用规范中的 **四舍五入、半值远离零** `Q(x)`，不使用 JavaScript `Math.round` 处理负半值。经度先归一到 `[-180,180)`；E7 量化得到 `+1800000000` 时转为 `-1800000000`。
+Reference edges longer than **250 m** are subdivided along their represented
+segments before simplification. The simplifier also uses 250 m as a span guard.
+Subdivision preserves the distance axis and adds no source precision. Its point
+budget is 400,000, checked before adding required boundary nodes.
 
-量化时，落到同一 `s_dm` 的几何点合并，强制边界节点优先。相邻 E7 坐标相同的普通节点也会消解；无法保留必要边界且形成有效几何时拒绝导出。超出整数范围的数值不会截断、回绕或饱和。最终 `GEOM.s_dm` 严格递增，首末分别为 0 和 `S`。
+All integer conversion uses the specification's `Q(x)`: round to nearest, with
+half values away from zero. JavaScript's `Math.round` does not implement this for
+negative half values. Longitude is normalized to `[-180, 180)`; E7 quantization
+that produces `+1800000000` is mapped to `-1800000000`.
 
-## 高程策略
+Geometry points at the same quantized `s_dm` merge, with required boundaries
+preferred. Adjacent equal E7 coordinates also merge where possible. If necessary
+boundaries cannot survive in valid geometry, export fails. Integer overflow is
+rejected rather than truncated or saturated. Final GEOM distances increase
+strictly from 0 to `S`. Quantization can introduce resolution-scale differences.
 
-几何与高程独立采样，通过里程关联，不使用相同数组下标。界面默认高程网格 **10 m**、平滑窗口 **0 m**，默认选择 `source`。规范要求所有导出均包含完整 `ELEV` 及高程元数据；缺失或未确认的高程会阻止导出，不再提供省略高程选项。
+## Elevation
 
-| `elevationMode` | 实际行为 |
-|---|---|
-| `source` | 要求全程源高程完整；存在缺失即返回错误。 |
-| `interpolate` | 用户明确选择后，有两侧已知高程的内部缺口按里程线性插值；首末缺失仍拒绝导出。 |
+Geometry and elevation are sampled independently and linked by distance, not
+array index. Defaults are a **10 m** elevation grid, **0 m** smoothing window and
+`source` mode. Every export requires complete ELEV and elevation metadata.
 
-内部缺口跨度按两侧已知点的沿线距离计算。超过 **100 m** 的每个缺口产生带位置、跨度的 `ELEVATION_LARGE_GAP` 警告，不阻止导出。显式补全记录 `containsFilledValues: true` 和补全提示；首末或全程缺失时返回 `INCOMPLETE_ELEVATION`，不得用最近高程将未知地形补平。`source` 模式即使采样避开缺失位置也要求源剖面完整。
+| `elevationMode` | Behavior                                                                             |
+| --------------- | ------------------------------------------------------------------------------------ |
+| `source`        | Every source height must be known                                                    |
+| `interpolate`   | Explicitly fill internal gaps by distance-linear interpolation between known heights |
 
-KML 第三列仅视为候选高度，不根据 `altitudeMode` 假定它代表地面。采用前必须设置 `acceptUncertainElevation`。当前 GPX/KML 输入高程均记录未知垂直基准 `verticalDatum: 0`；水平 WGS84 不自动意味着椭球高或海拔。导出高程元数据为 `source: 1`、`quality: 1`，不声称测绘认证或已验证精度。
+Missing endpoint or whole-route elevation produces `INCOMPLETE_ELEVATION` in
+either mode. Unknown terrain is never extended flat from a nearby height. Gap
+span is the route distance between the known points on either side. Each filled
+gap over **100 m** produces `ELEVATION_LARGE_GAP` with its location and span, but
+does not block export. Filled profiles set `containsFilledValues: true` and report
+the repair. `source` mode requires completeness even if the sampling grid would
+skip a missing point.
 
-处理后的网格包含 0、`S`、等间隔里程以及所有阶段边界；量化后的重复里程由集合消解，最终严格递增。核心采样间隔范围为 0.1–1,000 m，采样预算为 200,000 个节点。
+KML third-coordinate values are candidate heights, regardless of `altitudeMode`.
+Using them requires `acceptUncertainElevation`. Both GPX and KML currently use an
+unknown vertical datum, `verticalDatum: 0`; WGS84 horizontal coordinates do not
+establish a height datum. Generated elevation metadata uses `source: 1` and
+`quality: 1` without claiming verified accuracy.
 
-非零平滑窗口对源分段线性剖面作按距离积分的移动平均，靠近首末时截断窗口并用实际窗口长度求均值，因此端点高度也可能改变。先确定最终采样高度并量化 `h_dm`，再逐点计算 `up_dm` 与 `down_dm`，保证累计等式精确成立。平滑、采样间隔都可能改变累计升降，处理参数记录在本地编辑模型与质量报告中，不写入 META。显示曲线抽稀不能替代这份计算剖面。
+The grid includes 0, `S`, regular sample distances and every stage boundary.
+Duplicate quantized distances are removed. Core accepts intervals of 0.1–1,000 m
+and limits the profile to 200,000 samples.
 
-每一对相邻阶段边界生成完整 `stages` 缓存，`minHDm`、`maxHDm` 必须取最终 `ELEV` 闭区间内节点的精确极值。
+A nonzero smoothing window applies a distance-integrated moving average to the
+piecewise-linear source profile. At endpoints the window is clipped and divided
+by its actual length, so endpoint heights may change. Core accepts windows up to
+10,000 m. Final heights are quantized to `h_dm` before accumulating `up_dm` and
+`down_dm`, preserving their exact difference equations. Sampling and smoothing
+can change ascent and descent totals. Their settings remain in the local editor
+and quality report. Display thinning must not replace this calculation profile.
 
-## 磁偏角参考数据
+A complete `stages` cache is generated between each pair of stage boundaries.
+`minHDm` and `maxHDm` are the exact extrema of final ELEV nodes in the inclusive
+stage interval.
 
-新导入的路线默认开启联网查询，参考点取基准里程中点（`S/2`），日期初始为当天 UTC 日历日期，可修改。通过 [BGS 官方 WMM2025 服务](https://geomag.bgs.ac.uk/data_service/models_compass/wmm_calc.html)获取，只有参考坐标及日期发往服务；假定 WGS84 椭球高为 0 m，不复用基准未知的源高程。请求省略凭据和 referrer，8 秒超时；离线、超时、服务错误、无效响应或超出 2025–2029 年范围时，磁偏角保持缺失，允许正常导出。没有本地模型回退，不写入零值兜底。
+## Magnetic declination
 
-更改日期、反转路线、切换路线段或改变环线起点时，自动模式清除旧值并重新查询；过期响应和已取消响应不能覆盖当前编辑。查询完成前导出按钮等待结果，失败后解除等待。自动模式草稿恢复时重新查询，避免离线时沿用旧的默认值。成功响应校验模型、日期、坐标、单位和数值范围后，以 `source: "WMM2025 / BGS"` 写入；不将模型生命周期误作该常数的使用区间，自动值省略 `valid_from/valid_until`。
+New imports default to automatic BGS WMM2025 lookup at the reference-distance
+midpoint, `S/2`. The editable date starts at the current UTC calendar date. The
+request sends the reference coordinates and date, assuming WGS84 ellipsoid
+height 0 m rather than using source heights with an unknown datum. Credentials
+and referrer are omitted, with an 8-second timeout.
 
-也可选择手动填写或不包含磁偏角。手动模式保留用户的参考位置、日期、来源及使用区间，路线方向变化不会改写它；旧草稿有磁偏角时按手动模式恢复，没有时保持省略。
-界面以度录入，使用 `Q` 转为百分之一度和 E7 坐标；磁偏角东正西负。规范不再定义参考高度字段，BGS 请求使用的假定高度只属于查询实现。参考日期和可选的成对起止日期使用 UTC 公历日期，起止日期包含当日且必须包含参考日期。来源为 1–64 UTF-8 字节。非法或不完整的磁偏角信息阻止导出；选择不包含后整体省略，零值是有效值。
+Offline operation, service failures, invalid responses and dates outside
+2025–2029 leave declination absent and permit export after the lookup ends. There
+is no local model fallback. Automatic mode clears and refreshes the value when
+its date or reference route changes, and when a draft is restored. Cancelled or
+stale responses cannot overwrite current edits.
 
-该对象通过处理任务、本地草稿、撤销和质量报告保留，并以核心键 `META[9]` 写入。读取器必须解释并校验，键 128 仅作为可忽略的扩展处理。`queryMagneticDeclination` 使用存储常数：无使用区间时，无论有无可信日期均返回 `applicability: 'unspecified'`；可信 UTC 日期在声明区间内时返回 `'applicable'`。缺省、区间外或有区间但无可信日期时抛出 `unavailable`，并以错误的 `applicability` 分别标明 `'unavailable'`、`'outside_interval'`、`'time_unknown'`。参考日期不能代替查询日期。`convertHeading` 按规范进行磁北/真北转换，结果归一到 `[0,36000)` cdeg。
+Responses are checked for model, date, coordinates, angle units and range. A
+successful value uses `source: "WMM2025 / BGS"`. Automatic values omit validity
+dates: the model's lifetime is not treated as a constant's applicability interval.
 
-## 编码、校验与范围
+Manual mode retains the user's reference location, date, source and optional
+validity interval, including when route direction changes. Omission excludes the
+object entirely. The interface accepts degrees and applies `Q` to obtain
+centidegrees and E7 coordinates. Declination is positive east and negative west;
+zero is valid. Reference and validity dates use UTC Gregorian dates. Validity
+endpoints must appear together, are inclusive and must enclose the reference
+date. Source text must occupy 1–64 UTF-8 bytes. Invalid or incomplete values block
+export.
 
-`processRoute` 输出 `RouteData` 或 `route: null` 加结构化问题。Worker 导出任务调用 `encodeRte`，随后立即调用 `decodeRte` 验证字节，验证通过才交给下载。校验涵盖文件头、布局、确定性 CBOR、CRC、几何/高程/站点语义、阶段缓存和 `GIDX`，不只检查 CRC。
+Declination is retained in drafts, undo and reports, and encoded at core
+`META[9]`. `queryMagneticDeclination` returns the stored constant with applicability
+`unspecified` if no validity interval exists, and `applicable` for a trusted date
+inside the interval. Missing data, a date outside the interval or a missing
+trusted date for a declared interval throw `unavailable`, with applicability
+`unavailable`, `outside_interval` or `time_unknown` respectively. The reference
+date cannot substitute for a query date. `convertHeading` applies the format's
+magnetic/true conversion and normalizes to `[0, 36000)` centidegrees.
 
-核心回归覆盖 8 份用户样例、独立段、重复坐标、高程冲突、跨日期变更线、交叉处多次经过、反转、闭合起点调整、分米/E7 冲突、UTF-8 字节限制及完整高程统计。完整样例验证编码、严格回读与确定性回编码；不完整源剖面验证阻止导出，另以明确插值的样例验证内部缺口补全；这不表示原样例的高程已被认证。
+## Encoding and validation
 
-当前不提供在线 DEM 补全、源坐标系自动转换、不连续段拼接、道路吸附、手工补绘路线、设备专属点数限制、云端路线库或设备同步。地图投影和显示适配不会写回 WGS84 源坐标。
+`processRoute` returns `RouteData`, or `route: null` with structured issues. The
+export worker runs `encodeRte` followed by `decodeRte` before returning downloadable
+bytes. Validation covers the header, layout, deterministic CBOR, CRC, geometry,
+elevation, events, stages and GIDX relationships.
+
+Regression tests cover the eight source fixtures and synthetic cases for separate
+segments, duplicate coordinates, height conflicts, antimeridian crossings,
+repeated visits, reversal, closed-route start changes, quantization collisions,
+UTF-8 limits and elevation totals. Complete profiles are checked by encoding,
+strict decoding and deterministic re-encoding. Incomplete profiles must fail
+unless explicit interpolation can fill their internal gaps. These checks do not
+certify the source elevation's accuracy.
+
+The editor does not fetch DEM heights, transform source coordinate systems, join
+disconnected routes, snap to roads, draw missing route sections or synchronize
+with devices. Map display adaptations never change source coordinates.

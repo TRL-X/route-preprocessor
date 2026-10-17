@@ -17,7 +17,10 @@ export default defineConfig({
     acceptDownloads: true,
   },
   projects: [
-    { name: 'desktop-chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } } },
+    {
+      name: 'desktop-chromium',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } },
+    },
     { name: 'mobile-chromium', use: { ...devices['iPhone 13'], defaultBrowserType: 'chromium' } },
     { name: 'mobile-webkit', use: { ...devices['iPhone 13'] } },
   ],

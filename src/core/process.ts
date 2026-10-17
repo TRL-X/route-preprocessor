@@ -1,15 +1,41 @@
 import { validateMagneticDeclination } from './rte';
 import { cleanLabel } from './import';
-import type { DraftStation, ElevNode, GeomNode, MatchCandidate, ProcessingIssue, ProcessingOptions, ProcessingResult, ReferencePoint, ReferenceRoute, RouteIdentity, SourceLandmark, SourcePoint, SourceRoute, Stage, StationEvent } from './types';
+import type { CoreProcessingIssue, DiagnosticCode } from './diagnostics';
+import { PROCESSING_LIMITS, PROCESSING_RANGES } from './policy';
+import type {
+  DraftStation,
+  ElevNode,
+  GeomNode,
+  MatchCandidate,
+  ProcessingIssue,
+  ProcessingOptions,
+  ProcessingResult,
+  ReferencePoint,
+  ReferenceRoute,
+  RouteIdentity,
+  SourceLandmark,
+  SourcePoint,
+  SourceRoute,
+  Stage,
+  StationEvent,
+} from './types';
 
-export const ELEVATION_GAP_WARNING_M = 100;
-export const MAX_GEOMETRY_EDGE_M = 250;
+export const ELEVATION_GAP_WARNING_M = PROCESSING_LIMITS.elevationGapWarningM;
+export const MAX_GEOMETRY_EDGE_M = PROCESSING_LIMITS.maxGeometryEdgeM;
 const EARTH_RADIUS_M = 6_371_008.8;
 const RAD = Math.PI / 180;
 const UINT32_MAX = 0xffff_ffff;
 const encoder = new TextEncoder();
-const issue = (code: string, params: Record<string, string | number> = {}, severity: ProcessingIssue['severity'] = 'error', s?: number): ProcessingIssue => ({
-  code, params, severity, ...(s === undefined ? {} : { s }),
+const issue = (
+  code: DiagnosticCode,
+  params: Record<string, string | number> = {},
+  severity: ProcessingIssue['severity'] = 'error',
+  s?: number,
+): CoreProcessingIssue => ({
+  code,
+  params,
+  severity,
+  ...(s === undefined ? {} : { s }),
 });
 
 export function quantize(value: number): number {
@@ -17,37 +43,72 @@ export function quantize(value: number): number {
   return value < 0 ? Math.ceil(value - 0.5) : Math.floor(value + 0.5);
 }
 export function normalizeLongitude(value: number): number {
-  return value >= -180 && value < 180 ? value : ((value + 180) % 360 + 360) % 360 - 180;
+  return value >= -180 && value < 180 ? value : ((((value + 180) % 360) + 360) % 360) - 180;
 }
 const deltaLon = (a: number, b: number) => {
   const delta = (b - a) % 360;
-  // Preserve the sign of exactly half a turn so reversed segments retrace
-  // the same represented arc in the opposite direction.
+  // Keep the sign of a half-turn so reversing a segment retraces the same arc.
   return delta > 180 ? delta - 360 : delta < -180 ? delta + 360 : delta;
 };
-const sameCoordinate = (a: SourcePoint, b: SourcePoint) => a.lat === b.lat && deltaLon(a.lon, b.lon) === 0;
-const lonE7 = (value: number) => { const result = quantize(normalizeLongitude(value) * 1e7); return result === 1_800_000_000 ? -1_800_000_000 : result; };
+const sameCoordinate = (a: SourcePoint, b: SourcePoint) =>
+  a.lat === b.lat && deltaLon(a.lon, b.lon) === 0;
+const lonE7 = (value: number) => {
+  const result = quantize(normalizeLongitude(value) * 1e7);
+  return result === 1_800_000_000 ? -1_800_000_000 : result;
+};
 
 /** Horizontal great-circle distance over WGS84 coordinates, with antimeridian wrapping. */
-export function distanceM(a: Pick<SourcePoint, 'lat' | 'lon'>, b: Pick<SourcePoint, 'lat' | 'lon'>): number {
+export function distanceM(
+  a: Pick<SourcePoint, 'lat' | 'lon'>,
+  b: Pick<SourcePoint, 'lat' | 'lon'>,
+): number {
   const phi = (b.lat - a.lat) * RAD;
   const lambda = deltaLon(a.lon, b.lon) * RAD;
-  const h = Math.sin(phi / 2) ** 2 + Math.cos(a.lat * RAD) * Math.cos(b.lat * RAD) * Math.sin(lambda / 2) ** 2;
+  const h =
+    Math.sin(phi / 2) ** 2 +
+    Math.cos(a.lat * RAD) * Math.cos(b.lat * RAD) * Math.sin(lambda / 2) ** 2;
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(Math.min(1, Math.max(0, h))));
 }
 
-export function buildReference(source: SourceRoute, options: { reverse?: boolean; startIndex?: number } = {}): ReferenceRoute {
-  let sourcePoints = source.points.map((point, sourceIndex) => ({ ...point, sourceIndex, lon: normalizeLongitude(point.lon) }));
+export function buildReference(
+  source: SourceRoute,
+  options: { reverse?: boolean; startIndex?: number } = {},
+): ReferenceRoute {
+  let sourcePoints = source.points.map((point, sourceIndex) => ({
+    ...point,
+    sourceIndex,
+    lon: normalizeLongitude(point.lon),
+  }));
   const issues: ProcessingIssue[] = [];
-  if (sourcePoints.some((point) => !Number.isFinite(point.lat) || point.lat < -90 || point.lat > 90 || !Number.isFinite(point.lon) || (point.elevation !== null && !Number.isFinite(point.elevation)))) throw new Error('The route contains invalid coordinates or elevation.');
-  const closed = sourcePoints.length > 2 && sameCoordinate(sourcePoints[0], sourcePoints[sourcePoints.length - 1]);
+  if (
+    sourcePoints.some(
+      (point) =>
+        !Number.isFinite(point.lat) ||
+        point.lat < -90 ||
+        point.lat > 90 ||
+        !Number.isFinite(point.lon) ||
+        (point.elevation !== null && !Number.isFinite(point.elevation)),
+    )
+  ) {
+    throw new Error('The route contains invalid coordinates or elevation.');
+  }
+  const closed =
+    sourcePoints.length > 2 &&
+    sameCoordinate(sourcePoints[0], sourcePoints[sourcePoints.length - 1]);
   if (closed) sourcePoints[sourcePoints.length - 1].sourceIndex = 0;
   if (options.startIndex !== undefined && options.startIndex !== 0) {
     if (!closed) throw new Error('Only explicitly closed routes can change their starting point.');
-    if (!Number.isInteger(options.startIndex) || options.startIndex < 0 || options.startIndex >= sourcePoints.length - 1) throw new Error('The closed-route start index is invalid.');
-    // Keep both observations at the original closing seam, so any contradictory
-    // elevations are reported by duplicate cleaning rather than silently discarded.
-    sourcePoints = [...sourcePoints.slice(options.startIndex), ...sourcePoints.slice(0, options.startIndex + 1)];
+    if (
+      !Number.isInteger(options.startIndex) ||
+      options.startIndex < 0 ||
+      options.startIndex >= sourcePoints.length - 1
+    )
+      throw new Error('The closed-route start index is invalid.');
+    // Keep both closure observations so duplicate cleaning can detect height conflicts.
+    sourcePoints = [
+      ...sourcePoints.slice(options.startIndex),
+      ...sourcePoints.slice(0, options.startIndex + 1),
+    ];
   }
   if (options.reverse) sourcePoints.reverse();
   const points: ReferencePoint[] = [];
@@ -60,29 +121,44 @@ export function buildReference(source: SourceRoute, options: { reverse?: boolean
     const previous = points[points.length - 1];
     if (previous && sameCoordinate(previous, point)) {
       duplicates++;
-      if (!previousWasConflicted && previousKnownElevation !== null && point.elevation !== null && previousKnownElevation !== point.elevation) {
+      if (
+        !previousWasConflicted &&
+        previousKnownElevation !== null &&
+        point.elevation !== null &&
+        previousKnownElevation !== point.elevation
+      ) {
         conflicts++;
         previousWasConflicted = true;
       }
-      // Missing or contradictory observations cannot be silently upgraded to a known height.
-      if (previous.elevation === null || point.elevation === null || previousWasConflicted) previous.elevation = null;
-      if (previousKnownElevation === null && point.elevation !== null) previousKnownElevation = point.elevation;
+      // A missing or conflicting observation leaves the height unknown.
+      if (previous.elevation === null || point.elevation === null || previousWasConflicted)
+        previous.elevation = null;
+      if (previousKnownElevation === null && point.elevation !== null)
+        previousKnownElevation = point.elevation;
       continue;
     }
     previousWasConflicted = false;
     previousKnownElevation = point.elevation;
     const length = previous ? distanceM(previous, point) : 0;
-    if (length > 1000) largeEdges++;
+    if (length > PROCESSING_LIMITS.sourceEdgeWarningM) largeEdges++;
     points.push({ ...point, s: (previous?.s ?? 0) + length });
   }
   const totalM = points[points.length - 1]?.s ?? 0;
-  if (points.length < 2 || totalM < 0.1) issues.push(issue('ROUTE_TOO_SHORT'));
+  if (points.length < 2 || totalM < PROCESSING_LIMITS.minRouteLengthM)
+    issues.push(issue('ROUTE_TOO_SHORT'));
   if (duplicates) issues.push(issue('DUPLICATE_COORDINATES', { count: duplicates }, 'warning'));
   if (conflicts) issues.push(issue('ELEVATION_CONFLICT', { count: conflicts }, 'warning'));
   const missing = points.filter((point) => point.elevation === null).length;
   if (missing) issues.push(issue('ELEVATION_MISSING', { count: missing }, 'warning'));
   if (largeEdges) issues.push(issue('LARGE_SOURCE_EDGE', { count: largeEdges }, 'warning'));
-  return { points, totalM, isClosed: closed, elevationDatum: source.elevationDatum, elevationUncertain: source.elevationUncertain, issues };
+  return {
+    points,
+    totalM,
+    isClosed: closed,
+    elevationDatum: source.elevationDatum,
+    elevationUncertain: source.elevationUncertain,
+    issues,
+  };
 }
 
 function bracket(points: ReferencePoint[], s: number): number {
@@ -96,11 +172,19 @@ function bracket(points: ReferencePoint[], s: number): number {
   return low;
 }
 function interpolate(a: SourcePoint, b: SourcePoint, t: number): SourcePoint {
-  return { lat: a.lat + (b.lat - a.lat) * t, lon: normalizeLongitude(a.lon + deltaLon(a.lon, b.lon) * t), elevation: a.elevation === null || b.elevation === null ? null : a.elevation + (b.elevation - a.elevation) * t };
+  return {
+    lat: a.lat + (b.lat - a.lat) * t,
+    lon: normalizeLongitude(a.lon + deltaLon(a.lon, b.lon) * t),
+    elevation:
+      a.elevation === null || b.elevation === null
+        ? null
+        : a.elevation + (b.elevation - a.elevation) * t,
+  };
 }
 
 export function positionAt(reference: ReferenceRoute, s: number): SourcePoint {
-  if (!Number.isFinite(s) || s < 0 || s > reference.totalM || reference.points.length < 2) throw new Error('The requested distance is outside the route range.');
+  if (!Number.isFinite(s) || s < 0 || s > reference.totalM || reference.points.length < 2)
+    throw new Error('The requested distance is outside the route range.');
   const last = reference.points[reference.points.length - 1];
   if (s === reference.totalM) return { lat: last.lat, lon: last.lon, elevation: last.elevation };
   const index = bracket(reference.points, s);
@@ -110,8 +194,12 @@ export function positionAt(reference: ReferenceRoute, s: number): SourcePoint {
   return interpolate(a, b, (s - a.s) / (b.s - a.s));
 }
 
-function project(a: SourcePoint, b: SourcePoint, point: Pick<SourcePoint, 'lat' | 'lon'>): { t: number; distanceM: number; lat: number; lon: number } {
-  const cosLat = Math.cos((a.lat + b.lat + point.lat) / 3 * RAD);
+function project(
+  a: SourcePoint,
+  b: SourcePoint,
+  point: Pick<SourcePoint, 'lat' | 'lon'>,
+): { t: number; distanceM: number; lat: number; lon: number } {
+  const cosLat = Math.cos(((a.lat + b.lat + point.lat) / 3) * RAD);
   const x = deltaLon(a.lon, b.lon) * RAD * EARTH_RADIUS_M * cosLat;
   const y = (b.lat - a.lat) * RAD * EARTH_RADIUS_M;
   const px = deltaLon(a.lon, point.lon) * RAD * EARTH_RADIUS_M * cosLat;
@@ -122,7 +210,10 @@ function project(a: SourcePoint, b: SourcePoint, point: Pick<SourcePoint, 'lat' 
   return { t, distanceM: distanceM(point, projected), lat: projected.lat, lon: projected.lon };
 }
 
-export function matchLandmark(reference: ReferenceRoute, landmark: SourceLandmark): MatchCandidate[] {
+export function matchLandmark(
+  reference: ReferenceRoute,
+  landmark: SourceLandmark,
+): MatchCandidate[] {
   if (reference.points.length < 2) return [];
   const projections: MatchCandidate[] = [];
   let nearest = Infinity;
@@ -131,35 +222,71 @@ export function matchLandmark(reference: ReferenceRoute, landmark: SourceLandmar
     const b = reference.points[index];
     const result = project(a, b, landmark);
     nearest = Math.min(nearest, result.distanceM);
-    projections.push({ s: a.s + result.t * (b.s - a.s), distanceM: result.distanceM, lat: result.lat, lon: result.lon });
+    projections.push({
+      s: a.s + result.t * (b.s - a.s),
+      distanceM: result.distanceM,
+      lat: result.lat,
+      lon: result.lon,
+    });
   }
   const candidates: MatchCandidate[] = [];
   for (let index = 0; index < projections.length; index++) {
     const value = projections[index];
     if (value.distanceM > nearest + 20) continue;
     if (index > 0 && projections[index - 1].distanceM < value.distanceM) continue;
-    if (index + 1 < projections.length && projections[index + 1].distanceM < value.distanceM) continue;
+    if (index + 1 < projections.length && projections[index + 1].distanceM < value.distanceM)
+      continue;
     const previous = candidates[candidates.length - 1];
     if (previous && value.s - previous.s < 20) {
       if (value.distanceM < previous.distanceM) candidates[candidates.length - 1] = value;
     } else candidates.push(value);
   }
-  return candidates.sort((a, b) => a.distanceM - b.distanceM || a.s - b.s).slice(0, 32);
+  return candidates
+    .sort((a, b) => a.distanceM - b.distanceM || a.s - b.s)
+    .slice(0, PROCESSING_LIMITS.maxMatchCandidates);
 }
 
 function shortLabel(name: string): string {
   const preferred = name.match(/^(?:CP\s*)?[A-Za-z]*\d+/i)?.[0] ?? name;
   let result = '';
-  for (const char of preferred) { if (encoder.encode(result + char).length > 16) break; result += char; }
+  for (const char of preferred) {
+    if (encoder.encode(result + char).length > 16) break;
+    result += char;
+  }
   return result || 'POI';
 }
 
-export function createStations(reference: ReferenceRoute, landmarks: SourceLandmark[]): DraftStation[] {
+export function createStations(
+  reference: ReferenceRoute,
+  landmarks: SourceLandmark[],
+): DraftStation[] {
   if (reference.points.length < 2) return [];
   const first = reference.points[0];
   const last = reference.points[reference.points.length - 1];
-  const start: DraftStation = { id: 1, name: 'Start', shortLabel: 'START', kind: 0, stageBoundary: true, s: 0, lat: first.lat, lon: first.lon, confirmed: true, candidates: [] };
-  const finish: DraftStation = { id: 2, name: 'Finish', shortLabel: 'FINISH', kind: 1, stageBoundary: true, s: reference.totalM, lat: last.lat, lon: last.lon, confirmed: true, candidates: [] };
+  const start: DraftStation = {
+    id: 1,
+    name: 'Start',
+    shortLabel: 'START',
+    kind: 0,
+    stageBoundary: true,
+    s: 0,
+    lat: first.lat,
+    lon: first.lon,
+    confirmed: true,
+    candidates: [],
+  };
+  const finish: DraftStation = {
+    id: 2,
+    name: 'Finish',
+    shortLabel: 'FINISH',
+    kind: 1,
+    stageBoundary: true,
+    s: reference.totalM,
+    lat: last.lat,
+    lon: last.lon,
+    confirmed: true,
+    candidates: [],
+  };
   const stations: DraftStation[] = [];
   for (const landmark of landmarks) {
     const name = cleanLabel(landmark.name) || 'Station';
@@ -169,35 +296,61 @@ export function createStations(reference: ReferenceRoute, landmarks: SourceLandm
     const startDistance = distanceM(first, landmark);
     const finishDistance = distanceM(last, landmark);
     let consumed = false;
-    if ((isStart || isFinish) && startDistance <= 100 && (reference.isClosed ? isStart : startDistance <= finishDistance)) {
+    if (
+      (isStart || isFinish) &&
+      startDistance <= 100 &&
+      (reference.isClosed ? isStart : startDistance <= finishDistance)
+    ) {
       const endpointName = isStart ? name : `Start · ${name}`;
-      if (start.name === 'Start' || endpointName.length >= start.name.length) Object.assign(start, { name: endpointName, lat: landmark.lat, lon: landmark.lon });
+      if (start.name === 'Start' || endpointName.length >= start.name.length)
+        Object.assign(start, { name: endpointName, lat: landmark.lat, lon: landmark.lon });
       consumed = true;
     }
-    if ((isStart || isFinish) && finishDistance <= 100 && (reference.isClosed ? isFinish : finishDistance <= startDistance)) {
+    if (
+      (isStart || isFinish) &&
+      finishDistance <= 100 &&
+      (reference.isClosed ? isFinish : finishDistance <= startDistance)
+    ) {
       const endpointName = isFinish ? name : `Finish · ${name}`;
-      if (finish.name === 'Finish' || endpointName.length >= finish.name.length) Object.assign(finish, { name: endpointName, lat: landmark.lat, lon: landmark.lon });
+      if (finish.name === 'Finish' || endpointName.length >= finish.name.length)
+        Object.assign(finish, { name: endpointName, lat: landmark.lat, lon: landmark.lon });
       consumed = true;
     }
     if (consumed) continue;
     const candidates = matchLandmark(reference, landmark);
     const chosen = candidates[0];
     if (!chosen) continue;
-    stations.push({ id: 0, name, shortLabel: shortLabel(name), kind: /water|补水|補水|水站/i.test(name) ? 3 : 2,
+    stations.push({
+      id: 0,
+      name,
+      shortLabel: shortLabel(name),
+      kind: /water|补水|補水|水站/i.test(name) ? 3 : 2,
       stageBoundary: chosen.s > 0.05 && reference.totalM - chosen.s > 0.05,
-      s: chosen.s, lat: landmark.lat, lon: landmark.lon, confirmed: candidates.length === 1 && chosen.distanceM <= 50, candidates });
+      s: chosen.s,
+      lat: landmark.lat,
+      lon: landmark.lon,
+      confirmed: candidates.length === 1 && chosen.distanceM <= 50,
+      candidates,
+    });
   }
   stations.sort((a, b) => a.s - b.s);
   return [start, ...stations, finish].map((station, index) => ({ ...station, id: index + 1 }));
 }
 
-interface WorkPoint extends ReferencePoint { required: boolean }
+interface WorkPoint extends ReferencePoint {
+  required: boolean;
+}
 
-/** Constrain both lateral deviation and progress interpolation before quantizing. */
+/** Limit lateral deviation and progress error before quantization. */
 function simplify(points: WorkPoint[], toleranceM: number): WorkPoint[] {
   const keep = new Uint8Array(points.length);
   const anchors: number[] = [];
-  points.forEach((point, index) => { if (point.required) { anchors.push(index); keep[index] = 1; } });
+  points.forEach((point, index) => {
+    if (point.required) {
+      anchors.push(index);
+      keep[index] = 1;
+    }
+  });
   const stack: [number, number][] = anchors.slice(1).map((end, index) => [anchors[index], end]);
   while (stack.length) {
     const [start, end] = stack.pop()!;
@@ -210,31 +363,55 @@ function simplify(points: WorkPoint[], toleranceM: number): WorkPoint[] {
     if (b.s - a.s > MAX_GEOMETRY_EDGE_M || sameCoordinate(a, b)) {
       const midpoint = (a.s + b.s) / 2;
       split = start + 1;
-      for (let index = start + 2; index < end; index++) if (Math.abs(points[index].s - midpoint) < Math.abs(points[split].s - midpoint)) split = index;
+      for (let index = start + 2; index < end; index++)
+        if (Math.abs(points[index].s - midpoint) < Math.abs(points[split].s - midpoint))
+          split = index;
     } else {
       for (let index = start + 1; index < end; index++) {
         const candidate = points[index];
         const projection = project(a, b, candidate);
         const progressError = Math.abs(candidate.s - (a.s + projection.t * (b.s - a.s)));
-        const score = Math.max(projection.distanceM / Math.max(0.000001, toleranceM), progressError / Math.max(2, toleranceM));
-        if (score > maximumScore) { maximumScore = score; split = index; }
+        const score = Math.max(
+          projection.distanceM / Math.max(0.000001, toleranceM),
+          progressError / Math.max(2, toleranceM),
+        );
+        if (score > maximumScore) {
+          maximumScore = score;
+          split = index;
+        }
       }
     }
-    if (split !== -1) { keep[split] = 1; stack.push([start, split], [split, end]); }
+    if (split !== -1) {
+      keep[split] = 1;
+      stack.push([start, split], [split, end]);
+    }
   }
   return points.filter((_, index) => keep[index]);
 }
 
-function geometry(reference: ReferenceRoute, boundaryDm: number[], tolerance: number, issues: ProcessingIssue[]): GeomNode[] {
-  const totalDm = Number.isFinite(reference.totalM) ? quantize(reference.totalM * 10) : 0;
+function geometry(
+  reference: ReferenceRoute,
+  boundaryDm: number[],
+  tolerance: number,
+  issues: ProcessingIssue[],
+): GeomNode[] {
+  const totalDm = quantize(reference.totalM * 10);
   const nodes: WorkPoint[] = reference.points.map((point) => ({ ...point, required: false }));
-  // Sparse source edges are subdivided along their represented segment, without changing distance.
+  // Subdivide sparse edges without changing the reference distance axis.
   for (let index = 1; index < reference.points.length; index++) {
     const a = reference.points[index - 1];
     const b = reference.points[index];
     const pieces = Math.ceil((b.s - a.s) / MAX_GEOMETRY_EDGE_M);
-    if (nodes.length + pieces > 400_000) { issues.push(issue('GEOMETRY_RESOURCE_LIMIT')); return []; }
-    for (let step = 1; step < pieces; step++) nodes.push({ ...interpolate(a, b, step / pieces), s: a.s + (b.s - a.s) * step / pieces, required: false });
+    if (nodes.length + pieces > PROCESSING_LIMITS.maxGeometryNodes) {
+      issues.push(issue('GEOMETRY_RESOURCE_LIMIT'));
+      return [];
+    }
+    for (let step = 1; step < pieces; step++)
+      nodes.push({
+        ...interpolate(a, b, step / pieces),
+        s: a.s + ((b.s - a.s) * step) / pieces,
+        required: false,
+      });
   }
   for (const dm of boundaryDm) {
     const s = dm === totalDm ? reference.totalM : Math.min(reference.totalM, dm / 10);
@@ -248,15 +425,26 @@ function geometry(reference: ReferenceRoute, boundaryDm: number[], tolerance: nu
       if (node.required || !previous.required) distinct[distinct.length - 1] = node;
     } else distinct.push(node);
   }
-  if (distinct.length) { distinct[0].required = true; distinct[distinct.length - 1].required = true; }
+  if (distinct.length) {
+    distinct[0].required = true;
+    distinct[distinct.length - 1].required = true;
+  }
   const simplified = simplify(distinct, tolerance);
   const output: (GeomNode & { required: boolean })[] = [];
   let removed = 0;
   for (const point of simplified) {
-    const node = { latE7: quantize(point.lat * 1e7), lonE7: lonE7(point.lon), sDm: quantize(point.s * 10), required: point.required };
+    const node = {
+      latE7: quantize(point.lat * 1e7),
+      lonE7: lonE7(point.lon),
+      sDm: quantize(point.s * 10),
+      required: point.required,
+    };
     let previous = output[output.length - 1];
     while (previous && previous.latE7 === node.latE7 && previous.lonE7 === node.lonE7) {
-      if (previous.required && node.required) { issues.push(issue('GEOMETRY_QUANTIZATION_COLLISION', {}, 'error', point.s)); return []; }
+      if (previous.required && node.required) {
+        issues.push(issue('GEOMETRY_QUANTIZATION_COLLISION', {}, 'error', point.s));
+        return [];
+      }
       removed++;
       if (!node.required) break;
       output.pop();
@@ -267,10 +455,14 @@ function geometry(reference: ReferenceRoute, boundaryDm: number[], tolerance: nu
   }
   if (removed) issues.push(issue('GEOMETRY_QUANTIZATION_MERGE', { count: removed }, 'warning'));
   if (output.length < 2) issues.push(issue('GEOMETRY_QUANTIZATION_COLLISION'));
-  return output.map(({ latE7, lonE7: longitude, sDm }) => ({ latE7, lonE7: longitude, sDm }));
+  return output.map(({ latE7, lonE7, sDm }) => ({ latE7, lonE7, sDm }));
 }
 
-function repairedProfile(reference: ReferenceRoute, mode: ProcessingOptions['elevationMode'], issues: ProcessingIssue[]): { points: ReferencePoint[]; filled: boolean } | null {
+function repairedProfile(
+  reference: ReferenceRoute,
+  mode: ProcessingOptions['elevationMode'],
+  issues: ProcessingIssue[],
+): { points: ReferencePoint[]; filled: boolean } | null {
   const points = reference.points.map((point) => ({ ...point }));
   let filled = false;
   for (let index = 0; index < points.length; index++) {
@@ -279,31 +471,47 @@ function repairedProfile(reference: ReferenceRoute, mode: ProcessingOptions['ele
     while (index < points.length && points[index].elevation === null) index++;
     const left = points[firstMissing - 1];
     const right = points[index];
-    // Interpolation requires observations on both sides. Carrying the nearest
-    // height into an unknown endpoint gap would invent flat terrain.
+    // Interior gaps need observations on both sides; endpoint gaps cannot be interpolated.
     if (mode !== 'interpolate' || !left || !right) {
       issues.push(issue('INCOMPLETE_ELEVATION', {}, 'error', points[firstMissing].s));
       return null;
     }
     const span = right.s - left.s;
     if (span > ELEVATION_GAP_WARNING_M) {
-      issues.push(issue('ELEVATION_LARGE_GAP', { limit: ELEVATION_GAP_WARNING_M, distance: Math.round(span * 100) / 100 }, 'warning', points[firstMissing].s));
+      issues.push(
+        issue(
+          'ELEVATION_LARGE_GAP',
+          { limit: ELEVATION_GAP_WARNING_M, distance: Math.round(span * 100) / 100 },
+          'warning',
+          points[firstMissing].s,
+        ),
+      );
     }
     for (let gap = firstMissing; gap < index; gap++) {
-      points[gap].elevation = left.elevation! + (right.elevation! - left.elevation!) * (points[gap].s - left.s) / (right.s - left.s);
+      points[gap].elevation =
+        left.elevation! +
+        ((right.elevation! - left.elevation!) * (points[gap].s - left.s)) / (right.s - left.s);
     }
     filled = true;
   }
   return { points, filled };
 }
 
-function elevation(reference: ReferenceRoute, boundaryDm: number[], options: ProcessingOptions, issues: ProcessingIssue[]): { nodes: ElevNode[]; filled: boolean } | null {
+function elevation(
+  reference: ReferenceRoute,
+  boundaryDm: number[],
+  options: ProcessingOptions,
+  issues: ProcessingIssue[],
+): { nodes: ElevNode[]; filled: boolean } | null {
   const profile = repairedProfile(reference, options.elevationMode, issues);
   if (!profile) return null;
-  const totalDm = Number.isFinite(reference.totalM) ? quantize(reference.totalM * 10) : 0;
+  const totalDm = quantize(reference.totalM * 10);
   const intervalDm = quantize(options.elevationIntervalM * 10);
   const sampleCount = Math.ceil(totalDm / intervalDm) + boundaryDm.length;
-  if (sampleCount > 200_000) { issues.push(issue('PROFILE_RESOURCE_LIMIT')); return null; }
+  if (sampleCount > PROCESSING_LIMITS.maxElevationNodes) {
+    issues.push(issue('PROFILE_RESOURCE_LIMIT'));
+    return null;
+  }
   const sampleDm = new Set(boundaryDm);
   for (let s = intervalDm; s < totalDm; s += intervalDm) sampleDm.add(s);
   sampleDm.add(0);
@@ -312,67 +520,166 @@ function elevation(reference: ReferenceRoute, boundaryDm: number[], options: Pro
   for (let index = 1; index < profile.points.length; index++) {
     const a = profile.points[index - 1];
     const b = profile.points[index];
-    cumulativeArea.push(cumulativeArea[index - 1] + (a.elevation! + b.elevation!) / 2 * (b.s - a.s));
+    cumulativeArea.push(
+      cumulativeArea[index - 1] + ((a.elevation! + b.elevation!) / 2) * (b.s - a.s),
+    );
   }
   const height = (s: number): number => {
     if (s >= reference.totalM) return profile.points[profile.points.length - 1].elevation!;
     const index = bracket(profile.points, s);
     const a = profile.points[index];
     const b = profile.points[index + 1];
-    return a.elevation! + (b.elevation! - a.elevation!) * (s - a.s) / (b.s - a.s);
+    return a.elevation! + ((b.elevation! - a.elevation!) * (s - a.s)) / (b.s - a.s);
   };
   const area = (s: number): number => {
     if (s >= reference.totalM) return cumulativeArea[cumulativeArea.length - 1];
     const index = bracket(profile.points, s);
-    return cumulativeArea[index] + (profile.points[index].elevation! + height(s)) / 2 * (s - profile.points[index].s);
+    return (
+      cumulativeArea[index] +
+      ((profile.points[index].elevation! + height(s)) / 2) * (s - profile.points[index].s)
+    );
   };
   const nodes: ElevNode[] = [];
   for (const sDm of [...sampleDm].sort((a, b) => a - b)) {
     const s = sDm === totalDm ? reference.totalM : Math.min(reference.totalM, sDm / 10);
     const left = Math.max(0, s - options.smoothingWindowM / 2);
     const right = Math.min(reference.totalM, s + options.smoothingWindowM / 2);
-    const hDm = quantize((options.smoothingWindowM > 0 ? (area(right) - area(left)) / (right - left) : height(s)) * 10);
-    if (hDm < -2_147_483_648 || hDm > 2_147_483_647) { issues.push(issue('ELEVATION_RANGE')); return null; }
+    const hDm = quantize(
+      (options.smoothingWindowM > 0 ? (area(right) - area(left)) / (right - left) : height(s)) * 10,
+    );
+    if (hDm < -2_147_483_648 || hDm > 2_147_483_647) {
+      issues.push(issue('ELEVATION_RANGE'));
+      return null;
+    }
     const previous = nodes[nodes.length - 1];
     const delta = previous ? hDm - previous.hDm : 0;
-    const node = { sDm, hDm, upDm: (previous?.upDm ?? 0) + Math.max(0, delta), downDm: (previous?.downDm ?? 0) + Math.max(0, -delta) };
-    if (node.upDm > UINT32_MAX || node.downDm > UINT32_MAX) { issues.push(issue('ELEVATION_TOTAL_RANGE')); return null; }
+    const node = {
+      sDm,
+      hDm,
+      upDm: (previous?.upDm ?? 0) + Math.max(0, delta),
+      downDm: (previous?.downDm ?? 0) + Math.max(0, -delta),
+    };
+    if (node.upDm > UINT32_MAX || node.downDm > UINT32_MAX) {
+      issues.push(issue('ELEVATION_TOTAL_RANGE'));
+      return null;
+    }
     nodes.push(node);
   }
   if (profile.filled) issues.push(issue('ELEVATION_FILLED', {}, 'warning'));
   return { nodes, filled: profile.filled };
 }
 
-function textIssue(value: string, maxBytes: number): boolean {
-  return !value || encoder.encode(value).length > maxBytes || /[\u0000-\u001f\u007f]/.test(value) || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value);
+function invalidLabel(value: string, maxBytes: number): boolean {
+  return (
+    !value ||
+    encoder.encode(value).length > maxBytes ||
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)
+  );
 }
 
-export function processRoute(reference: ReferenceRoute, stations: DraftStation[], options: ProcessingOptions, identity: RouteIdentity): ProcessingResult {
+function withinRange(value: number, range: { min: number; max: number }): boolean {
+  return Number.isFinite(value) && value >= range.min && value <= range.max;
+}
+
+export function processRoute(
+  reference: ReferenceRoute,
+  stations: DraftStation[],
+  options: ProcessingOptions,
+  identity: RouteIdentity,
+): ProcessingResult {
   const issues: ProcessingIssue[] = [...reference.issues];
   if (identity.magneticDeclination !== undefined) {
-    try { validateMagneticDeclination(identity.magneticDeclination); }
-    catch { issues.push(issue('MAGNETIC_DECLINATION_INVALID')); }
+    try {
+      validateMagneticDeclination(identity.magneticDeclination);
+    } catch {
+      issues.push(issue('MAGNETIC_DECLINATION_INVALID'));
+    }
   }
-  if (identity.routeId.length !== 16 || !identity.routeId.some(Boolean) || !Number.isInteger(identity.revision) || identity.revision < 1 || identity.revision > UINT32_MAX) issues.push(issue('IDENTITY_INVALID'));
-  if (textIssue(identity.name, 96)) issues.push(issue('ROUTE_NAME_INVALID'));
-  if (identity.inputSha256 && identity.inputSha256.length !== 32) issues.push(issue('SOURCE_HASH_INVALID'));
-  if (!Number.isFinite(reference.totalM) || reference.totalM < 0.1 || reference.totalM * 10 > UINT32_MAX) issues.push(issue('DISTANCE_RANGE'));
-  if (!Number.isFinite(options.geometryToleranceM) || options.geometryToleranceM < 0 || options.geometryToleranceM > 1000 || !Number.isFinite(options.elevationIntervalM) || options.elevationIntervalM < 0.1 || options.elevationIntervalM > 1000 || !Number.isFinite(options.smoothingWindowM) || options.smoothingWindowM < 0 || options.smoothingWindowM > 10_000 || !['source', 'interpolate'].includes(options.elevationMode)) issues.push(issue('OPTIONS_INVALID'));
+  if (
+    identity.routeId.length !== 16 ||
+    !identity.routeId.some(Boolean) ||
+    !Number.isInteger(identity.revision) ||
+    identity.revision < 1 ||
+    identity.revision > UINT32_MAX
+  ) {
+    issues.push(issue('IDENTITY_INVALID'));
+  }
+  if (invalidLabel(identity.name, 96)) issues.push(issue('ROUTE_NAME_INVALID'));
+  if (
+    !Number.isFinite(reference.totalM) ||
+    reference.totalM < PROCESSING_LIMITS.minRouteLengthM ||
+    reference.totalM * 10 > UINT32_MAX
+  ) {
+    issues.push(issue('DISTANCE_RANGE'));
+  }
+  if (
+    !withinRange(options.geometryToleranceM, PROCESSING_RANGES.geometryToleranceM) ||
+    !withinRange(options.elevationIntervalM, PROCESSING_RANGES.elevationIntervalM) ||
+    !withinRange(options.smoothingWindowM, PROCESSING_RANGES.smoothingWindowM) ||
+    !['source', 'interpolate'].includes(options.elevationMode)
+  ) {
+    issues.push(issue('OPTIONS_INVALID'));
+  }
   const totalDm = Number.isFinite(reference.totalM) ? quantize(reference.totalM * 10) : 0;
   if (stations.length < 2 || stations.length > 4096) issues.push(issue('STATION_COUNT'));
-  const events: StationEvent[] = stations.map((station) => {
-    if (!station.confirmed) issues.push(issue('STATION_UNCONFIRMED', { name: station.name }, 'error', station.s));
-    if (textIssue(station.name, 96) || textIssue(station.shortLabel, 16)) issues.push(issue('STATION_NAME_INVALID', { name: station.name }));
-    if (!Number.isInteger(station.id) || station.id < 1 || station.id > UINT32_MAX || !Number.isInteger(station.kind) || station.kind < 0 || station.kind > 4 || !Number.isFinite(station.s) || station.s < 0 || station.s > reference.totalM || !Number.isFinite(station.lat) || station.lat < -90 || station.lat > 90 || !Number.isFinite(station.lon)) issues.push(issue('STATION_INVALID', { name: station.name }));
-    return { eventId: station.id, name: station.name, shortLabel: station.shortLabel, kind: station.kind, stageBoundary: station.stageBoundary, sDm: Number.isFinite(station.s) ? quantize(station.s * 10) : 0, actualLatE7: Number.isFinite(station.lat) ? quantize(station.lat * 1e7) : 0, actualLonE7: Number.isFinite(station.lon) ? lonE7(station.lon) : 0 };
-  }).sort((a, b) => a.sDm - b.sDm || a.eventId - b.eventId);
-  if (new Set(events.map((event) => event.eventId)).size !== events.length) issues.push(issue('EVENT_ID_DUPLICATE'));
+  const events: StationEvent[] = stations
+    .map((station) => {
+      if (!station.confirmed)
+        issues.push(issue('STATION_UNCONFIRMED', { name: station.name }, 'error', station.s));
+      if (invalidLabel(station.name, 96) || invalidLabel(station.shortLabel, 16))
+        issues.push(issue('STATION_NAME_INVALID', { name: station.name }));
+      if (
+        !Number.isInteger(station.id) ||
+        station.id < 1 ||
+        station.id > UINT32_MAX ||
+        !Number.isInteger(station.kind) ||
+        station.kind < 0 ||
+        station.kind > 4 ||
+        !Number.isFinite(station.s) ||
+        station.s < 0 ||
+        station.s > reference.totalM ||
+        !Number.isFinite(station.lat) ||
+        station.lat < -90 ||
+        station.lat > 90 ||
+        !Number.isFinite(station.lon)
+      ) {
+        issues.push(issue('STATION_INVALID', { name: station.name }));
+      }
+      return {
+        eventId: station.id,
+        name: station.name,
+        shortLabel: station.shortLabel,
+        kind: station.kind,
+        stageBoundary: station.stageBoundary,
+        sDm: Number.isFinite(station.s) ? quantize(station.s * 10) : 0,
+        actualLatE7: Number.isFinite(station.lat) ? quantize(station.lat * 1e7) : 0,
+        actualLonE7: Number.isFinite(station.lon) ? lonE7(station.lon) : 0,
+      };
+    })
+    .sort((a, b) => a.sDm - b.sDm || a.eventId - b.eventId);
+  if (new Set(events.map((event) => event.eventId)).size !== events.length)
+    issues.push(issue('EVENT_ID_DUPLICATE'));
   const starts = events.filter((event) => event.kind === 0);
   const finishes = events.filter((event) => event.kind === 1);
-  if (starts.length !== 1 || finishes.length !== 1 || events[0] !== starts[0] || events[events.length - 1] !== finishes[0] || starts[0]?.sDm !== 0 || finishes[0]?.sDm !== totalDm || !starts[0]?.stageBoundary || !finishes[0]?.stageBoundary) issues.push(issue('ENDPOINT_EVENTS'));
+  if (
+    starts.length !== 1 ||
+    finishes.length !== 1 ||
+    events[0] !== starts[0] ||
+    events[events.length - 1] !== finishes[0] ||
+    starts[0]?.sDm !== 0 ||
+    finishes[0]?.sDm !== totalDm ||
+    !starts[0]?.stageBoundary ||
+    !finishes[0]?.stageBoundary
+  ) {
+    issues.push(issue('ENDPOINT_EVENTS'));
+  }
   const boundaries = events.filter((event) => event.stageBoundary);
-  for (let index = 1; index < boundaries.length; index++) if (boundaries[index].sDm <= boundaries[index - 1].sDm) issues.push(issue('BOUNDARY_COLLISION', {}, 'error', boundaries[index].sDm / 10));
-  if (reference.elevationUncertain && !options.acceptUncertainElevation) issues.push(issue('ELEVATION_UNCONFIRMED'));
+  for (let index = 1; index < boundaries.length; index++)
+    if (boundaries[index].sDm <= boundaries[index - 1].sDm)
+      issues.push(issue('BOUNDARY_COLLISION', {}, 'error', boundaries[index].sDm / 10));
+  if (reference.elevationUncertain && !options.acceptUncertainElevation)
+    issues.push(issue('ELEVATION_UNCONFIRMED'));
   if (issues.some((entry) => entry.severity === 'error')) return { route: null, issues };
   const boundaryDm = boundaries.map((event) => event.sDm);
   const profile = elevation(reference, boundaryDm, options, issues);
@@ -388,17 +695,37 @@ export function processRoute(reference: ReferenceRoute, stations: DraftStation[]
     let max = -Infinity;
     while (profileIndex < profile.nodes.length && profile.nodes[profileIndex].sDm <= to.sDm) {
       const node = profile.nodes[profileIndex];
-      min = Math.min(min, node.hDm); max = Math.max(max, node.hDm);
+      min = Math.min(min, node.hDm);
+      max = Math.max(max, node.hDm);
       if (node.sDm === to.sDm) break;
       profileIndex++;
     }
     stages.push({ fromEventId: from.eventId, toEventId: to.eventId, minHDm: min, maxHDm: max });
   }
-  return { route: {
-    routeId: identity.routeId.slice(), revision: identity.revision, name: identity.name, routeKind: reference.isClosed ? 1 : 0,
-    totalSDm: totalDm, geom, stations: events, stages,
-    ...(identity.magneticDeclination ? { magneticDeclination: { ...identity.magneticDeclination } } : {}),
-    elev: profile.nodes, elevationInfo: { source: 1, verticalDatum: reference.elevationDatum, quality: 1, sourceDetail: reference.elevationUncertain ? 'User-accepted source altitude; vertical datum unknown' : 'Source file elevation', containsFilledValues: profile.filled },
-    preprocessing: { tool: 'TRL-X Route Studio', toolVersion: '0.1.0', recipeId: `browser-v1-${options.elevationMode}`, ...(identity.inputSha256 ? { inputSha256: identity.inputSha256.slice() } : {}), parameters: { geometryToleranceDm: quantize(options.geometryToleranceM * 10), elevationGridDm: quantize(options.elevationIntervalM * 10), elevationSmoothingWindowDm: quantize(options.smoothingWindowM * 10) } },
-  }, issues };
+  return {
+    route: {
+      routeId: identity.routeId.slice(),
+      revision: identity.revision,
+      name: identity.name,
+      routeKind: reference.isClosed ? 1 : 0,
+      totalSDm: totalDm,
+      geom,
+      stations: events,
+      stages,
+      elev: profile.nodes,
+      ...(identity.magneticDeclination
+        ? { magneticDeclination: { ...identity.magneticDeclination } }
+        : {}),
+      elevationInfo: {
+        source: 1,
+        verticalDatum: reference.elevationDatum,
+        quality: 1,
+        sourceDetail: reference.elevationUncertain
+          ? 'User-accepted source altitude; vertical datum unknown'
+          : 'Source file elevation',
+        containsFilledValues: profile.filled,
+      },
+    },
+    issues,
+  };
 }

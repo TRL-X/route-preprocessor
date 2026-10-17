@@ -6,4 +6,10 @@ import { i18n } from './i18n';
 import './styles.css';
 import './app/layout.css';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><I18nextProvider i18n={i18n}><App /></I18nextProvider></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <I18nextProvider i18n={i18n}>
+      <App />
+    </I18nextProvider>
+  </React.StrictMode>,
+);
