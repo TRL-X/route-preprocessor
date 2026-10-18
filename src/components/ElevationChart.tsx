@@ -145,6 +145,7 @@ export default function ElevationChart({
       segments: displaySegments(points),
     };
   }, [points, sourceSegments]);
+  const hasElevation = profile.count > 0;
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -153,7 +154,7 @@ export default function ElevationChart({
     );
     observer.observe(svg);
     return () => observer.disconnect();
-  }, [profile.count > 0]);
+  }, [hasElevation]);
   const total = route ? route.totalSDm / 10 : (reference?.totalM ?? 0);
   const currentS = Math.max(0, Math.min(total, cursorS ?? 0));
   const currentH = heightAt(points, currentS);

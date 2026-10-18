@@ -29,7 +29,17 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
-import { STEPS, type Step } from './app/flow';
+import {
+  STEPS,
+  INITIAL_WORKFLOW,
+  canNavigate,
+  completedSteps,
+  confirmWorkflowRoute,
+  navigateWorkflow,
+  resetWorkflow,
+  workflowAfterEdit,
+  type Step,
+} from './app/flow';
 import type { Editor } from './app/editor';
 import { downloadQualityReport, routeFilename } from './app/route-files';
 import { useEditorSession } from './app/useEditorSession';
@@ -42,7 +52,7 @@ import type { DraftStation, ProcessingIssue, ProcessingOptions } from './core/ty
 import ElevationChart from './components/ElevationChart';
 import ImportLanding from './features/import/ImportLanding';
 import IssuesList from './features/review/IssuesList';
-import { issueStage, issuesForStep } from './features/review/issue-visibility';
+import { issuesForStep } from './features/review/issue-visibility';
 import StageList from './features/review/StageList';
 import MagneticDeclinationFields from './components/MagneticDeclinationFields';
 import BluetoothUpload from './features/export/BluetoothUpload';
@@ -58,6 +68,8 @@ export default function App() {
     }) + (bytes >= 1048576 ? ' MB' : ' KB');
   const session = useEditorSession();
   const { editor, saved, draft, canUndo, currentRevision } = session;
+  const reference = editor?.reference;
+  const hasEditor = !!editor;
   const {
     result,
     processing,
@@ -76,11 +88,11 @@ export default function App() {
     files.clearError();
     session.clearLoadError();
   };
-  const [step, setStep] = useState<Step>('import');
+  const [workflow, setWorkflow] = useState(INITIAL_WORKFLOW);
+  const { step, confirmedRoute } = workflow;
   const stepIndex = STEPS.indexOf(step);
   const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
   const [cursorS, setCursorS] = useState<number | null>(null);
-  const [unlockedStep, setUnlockedStep] = useState(1);
   const [compareSource, setCompareSource] = useState(true);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [stackedPreview, setStackedPreview] = useState(false);
@@ -90,14 +102,11 @@ export default function App() {
     setActiveView(view);
     setPreviewCollapsed(false);
   };
-  const [confirmedRoute, setConfirmedRoute] = useState(false);
   const [dialog, setDialog] = useState<{ title: string; body: string; run: () => void } | null>(
     null,
   );
   const fileInput = useRef<HTMLInputElement>(null);
   const route = result?.route ?? null;
-  const ready =
-    declinationStatus !== 'loading' && !!route && currentResult && !busy && confirmedRoute;
   const sortedStations = editor
     ? [...editor.stations].sort((a, b) => a.s - b.s || a.id - b.id)
     : [];
@@ -112,48 +121,28 @@ export default function App() {
   const visibleIssues = editor
     ? issuesForStep([...issues, ...importIssues], step, editor.options)
     : [];
-  const errors = issues.filter((issue) => issue.severity === 'error');
-  const routeComplete =
-    !!editor &&
-    currentResult &&
-    confirmedRoute &&
-    !errors.some((issue) => !['stations', 'elevation'].includes(issueStage(issue, editor.options)));
-  const stationsComplete =
-    routeComplete &&
-    unresolved === 0 &&
-    !errors.some((issue) => issueStage(issue, editor?.options) === 'stations');
-  const elevationComplete = stationsComplete && !!route && currentResult;
-  const complete = [
-    !!editor,
-    routeComplete,
-    stationsComplete,
-    elevationComplete,
-    elevationComplete,
-    ready,
-  ];
-  const canGo = (next: Step) => {
-    if (busy) return false;
-    const target = STEPS.indexOf(next);
-    if (target === 0) return true;
-    if (!editor) return false;
-    if (target <= stepIndex) return true;
-    if (target > unlockedStep && target !== stepIndex + 1) return false;
-    return complete.slice(0, target).every(Boolean);
-  };
+  const complete = completedSteps({
+    editor,
+    issues,
+    currentResult,
+    hasRoute: !!route,
+    declinationLoading: declinationStatus === 'loading',
+    busy,
+    confirmedRoute,
+  });
+  const ready = complete.export;
+  const canGo = (next: Step) => canNavigate(workflow, next, complete, busy);
   const go = (next: Step) => {
     if (!canGo(next)) return;
-    setUnlockedStep((previous) => Math.max(previous, STEPS.indexOf(next)));
-    setStep(next);
+    setWorkflow((previous) => navigateWorkflow(previous, next, complete, busy));
     clearError();
   };
 
   useEffect(() => {
     setCursorS((previous) =>
-      previous === null || !editor
-        ? null
-        : Math.min(editor.reference.totalM, Math.max(0, previous)),
+      previous === null || !reference ? null : Math.min(reference.totalM, Math.max(0, previous)),
     );
-  }, [editor?.reference]);
+  }, [reference]);
 
   // Stack the map and profile only when the preview pane has room for both.
   useEffect(() => {
@@ -164,28 +153,13 @@ export default function App() {
     );
     observer.observe(workspace);
     return () => observer.disconnect();
-  }, [!!editor, step]);
+  }, [hasEditor, step]);
 
   function edit(update: (previous: Editor) => Editor) {
     if (busy || files.isBusy()) return;
     const change = session.edit(update);
     if (!change) return;
-    const { previous, next } = change;
-    if (
-      next.name !== previous.name ||
-      next.reference !== previous.reference ||
-      next.magneticDeclination !== previous.magneticDeclination ||
-      next.declinationMode !== previous.declinationMode ||
-      next.declinationQueryDate !== previous.declinationQueryDate ||
-      next.options.geometryToleranceM !== previous.options.geometryToleranceM
-    ) {
-      setConfirmedRoute(false);
-      setUnlockedStep(1);
-    } else if (next.stations !== previous.stations) {
-      setUnlockedStep((value) => Math.min(value, 2));
-    } else if (next.options !== previous.options) {
-      setUnlockedStep((value) => Math.min(value, 3));
-    }
+    setWorkflow((previous) => workflowAfterEdit(previous, change.previous, change.next));
     clearError();
   }
   const editStation = (patch: Partial<DraftStation>) =>
@@ -201,9 +175,7 @@ export default function App() {
   function resetEditorView() {
     setCursorS(0);
     setSelectedStationId(null);
-    setConfirmedRoute(false);
-    setUnlockedStep(1);
-    setStep('route');
+    setWorkflow(resetWorkflow());
   }
   async function importFile(file: File) {
     if (busy) return;
@@ -344,8 +316,7 @@ export default function App() {
                 disabled={!canUndo || !!busy}
                 onClick={() => {
                   if (session.undo()) {
-                    setConfirmedRoute(false);
-                    setUnlockedStep(1);
+                    setWorkflow((previous) => confirmWorkflowRoute(previous, false));
                   }
                 }}
               >
@@ -1016,8 +987,8 @@ export default function App() {
                           type="checkbox"
                           checked={confirmedRoute}
                           onChange={(e) => {
-                            setConfirmedRoute(e.target.checked);
-                            if (!e.target.checked) setUnlockedStep(1);
+                            const confirmed = e.target.checked;
+                            setWorkflow((previous) => confirmWorkflowRoute(previous, confirmed));
                           }}
                         />
                         <span>{t('app.confirmRouteDirection')}</span>

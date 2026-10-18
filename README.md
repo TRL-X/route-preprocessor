@@ -79,13 +79,14 @@ report success after the device acknowledges the complete file.
 ## Verification
 
 ```sh
-npm run format:check
-npm run typecheck
-npm test
-npm run build
+npm run check
 npx playwright install chromium webkit
 npm run test:e2e
 ```
+
+`npm run check` runs formatting, lint, type checks, unit tests and the production
+build. Each check is also available separately. `npm run lint` checks React Hooks
+and the dependency boundaries of core, device transport and workers.
 
 Run `npm run format` to apply the shared Prettier configuration. CI checks formatting;
 source route files and reference vectors are excluded to preserve their original bytes.
@@ -94,8 +95,8 @@ Unit tests cover the specification's A/B/C vectors, malformed files, quantizatio
 cross-section relationships, preprocessing, elevation statistics and revision
 allocation. Playwright covers desktop Chromium, a phone-sized Chromium viewport
 and WebKit, including validation of downloaded files. These browser profiles do
-not replace testing on physical devices. GitHub Actions runs type checks, unit
-tests, the production build and browser tests.
+not replace testing on physical devices. GitHub Actions runs formatting, lint,
+type checks, unit tests, the production build and browser tests.
 
 The [2026MY fixtures](tests/fixtures/routes/2026MY/README.md) contain eight original
 GPX/KML files across four route groups, with SHA-256 hashes and source observations.
@@ -137,6 +138,8 @@ docs/           Implementation and maintenance notes
 
 `src/core` is independent of React, the browser DOM and the map SDK.
 
+- [Development agreements](AGENTS.md): focused changes, module ownership and
+  verification requirements for contributors and coding agents.
 - [Specification alignment](docs/specification.md): the pinned upstream format
   specification and the procedure for updating the implementation.
 - [Architecture](docs/architecture.md): module boundaries, state and persistence.
