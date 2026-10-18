@@ -742,11 +742,13 @@ export default function App() {
                                     <Check size={14} className="muted" aria-hidden="true" />
                                   )}
                                   <span className="station-disclosure">
-                                    {t(
-                                      selectedStationId === station.id
-                                        ? 'app.collapseStationEditor'
-                                        : 'app.expandStationEditor',
-                                    )}
+                                    <span>
+                                      {t(
+                                        selectedStationId === station.id
+                                          ? 'app.collapseStationEditor'
+                                          : 'app.expandStationEditor',
+                                      )}
+                                    </span>
                                     <ChevronDown size={14} aria-hidden="true" />
                                   </span>
                                 </span>

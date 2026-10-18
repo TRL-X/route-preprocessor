@@ -65,7 +65,9 @@ accumulated ascent and descent unchanged.
 
 Station controls expand directly below the selected row without changing station
 order. Rows show an expand/collapse action, and opening animates the editor height
-unless reduced motion is requested. The pending-station list links each station
+unless reduced motion is requested. On phones, action labels wrap within a bounded
+column to leave room for station metadata across system fonts and scrollbar widths.
+The pending-station list links each station
 name and distance to its editor, focuses its row and updates the linked cursor.
 The next-unconfirmed action still cycles through pending positions; neither action
 confirms a position automatically. The list replaces duplicate unconfirmed-position

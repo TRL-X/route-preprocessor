@@ -460,111 +460,118 @@ test('requires a deliberate visit choice at repeated crossings', async ({ page }
   );
 });
 
-test('edits stations beside the selected row and cycles through remaining confirmations', async ({
-  page,
-  isMobile,
-}) => {
-  const crossing: Point[] = [
-    [0, 0, 100],
-    [0, 0.001, 110],
-    [0.001, 0.001, 120],
-    [0, 0.001, 110],
-    [0, 0.002, 100],
-  ];
-  const landmarks = Array.from({ length: 12 }, (_, index) => {
-    const name = `Crossing ${String(index + 1).padStart(2, '0')}`;
-    return `<wpt lat="0" lon="0.001"><name>${name}</name></wpt>`;
-  }).join('');
-  await importText(page, gpx(crossing, landmarks));
-  await confirmRoute(page);
-  await expect(
-    page.getByText(
-      'To add: choose a position on the map or profile, then select Add station. To move: select a station, choose a new position, then select Move to cursor.',
-      { exact: true },
-    ),
-  ).toHaveCount(0);
-  const rows = page.locator('.station-row');
-  await expect(rows).toHaveCount(14);
-  await expect(rows.filter({ hasText: 'Position needs confirmation' })).toHaveCount(12);
-  const pending = page.getByRole('list', { name: 'Unconfirmed stations', exact: true });
-  const last = rows.filter({ hasText: 'Crossing 12' });
-  const pendingLast = pending.getByRole('button', { name: /Crossing 12/ });
-  await expect(pendingLast).toContainText(/\d+\.\d{2} km/);
-  await pendingLast.click();
-  await expect(last).toBeFocused();
-  await expect(last).toBeInViewport({ ratio: 1 });
-  await expect(last).toHaveAttribute('aria-expanded', 'true');
-  await expect(last).toContainText('Collapse editor');
-  const name = page.getByLabel('Name', { exact: true });
-  const next = page.getByRole('button', { name: 'Next unconfirmed station', exact: true });
-  await expect(name).toHaveValue('Crossing 12');
-  const selectedDistance = Number(
-    await page.getByLabel('Along-route distance (m)', { exact: true }).inputValue(),
-  );
-  await expect
-    .poll(async () =>
-      Number(await page.getByRole('slider', { name: 'Route progress', exact: true }).inputValue()),
-    )
-    .toBeCloseTo(selectedDistance, 0);
-  if (isMobile) await page.getByRole('button', { name: 'Collapse preview', exact: true }).click();
-  await expect(name).toBeInViewport({ ratio: 1 });
-  await last.click();
-  await expect(last).toHaveAttribute('aria-expanded', 'false');
-  await expect(last).toContainText('Expand to edit');
-  await expect(name).toHaveCount(0);
-  await last.press('Enter');
-  await expect(last).toHaveAttribute('aria-expanded', 'true');
-  await expect(name).toHaveValue('Crossing 12');
-  await last.press('Space');
-  await expect(last).toHaveAttribute('aria-expanded', 'false');
-  await expect(name).toHaveCount(0);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await last.press('Enter');
-  await expect(name).toHaveValue('Crossing 12');
-  await expect(name).toBeVisible();
-  expect(
-    await page.locator('.station-editor-reveal').evaluate((el) => {
-      const style = getComputedStyle(el);
-      return (
-        style.animationName === 'none' ||
-        style.animationDuration.split(',').every((duration) => {
-          const value = Number.parseFloat(duration);
-          return (duration.trim().endsWith('ms') ? value / 1000 : value) <= 0.001;
-        })
-      );
-    }),
-  ).toBe(true);
-  await pending.getByRole('button', { name: /Crossing 01/ }).click();
-  const first = rows.filter({ hasText: 'Crossing 01' });
-  await expect(first).toBeFocused();
-  await expect(first).toHaveAttribute('aria-expanded', 'true');
-  await expect(last).toHaveAttribute('aria-expanded', 'false');
-  await expect(name).toHaveValue('Crossing 01');
-  await expect(page.locator('.station-editor')).toHaveCount(1);
-  const editorId = await first.getAttribute('aria-controls');
-  expect(editorId).not.toBeNull();
-  await expect(
-    page.locator('.station-item').filter({ has: first }).locator('.station-editor'),
-  ).toHaveAttribute('id', editorId!);
-  await next.click();
-  await expect(name).toHaveValue('Crossing 02');
-  await page.getByRole('button', { name: 'Confirm station position', exact: true }).click();
-  await expect(rows.filter({ hasText: 'Crossing 02' })).not.toContainText(
-    'Position needs confirmation',
-  );
-  await expect(rows.filter({ hasText: 'Position needs confirmation' })).toHaveCount(11);
-  await expect(pending.getByRole('button', { name: /Crossing 02/ })).toHaveCount(0);
-  await next.click();
-  await expect(name).toHaveValue('Crossing 03');
-  await rows.filter({ hasText: 'Crossing 12' }).click();
-  await next.click();
-  await expect(name).toHaveValue('Crossing 01');
-  await next.click();
-  await expect(name).toHaveValue('Crossing 03');
-  await expect(rows).toHaveCount(14);
-  await expect(page.getByRole('button', { name: 'Next: Elevation', exact: true })).toBeDisabled();
-  await noOverflow(page);
-});
+for (const font of ['default', 'wide'] as const) {
+  test(`edits stations beside the selected row and cycles through remaining confirmations (${font} font)`, async ({
+    page,
+    isMobile,
+  }) => {
+    const crossing: Point[] = [
+      [0, 0, 100],
+      [0, 0.001, 110],
+      [0.001, 0.001, 120],
+      [0, 0.001, 110],
+      [0, 0.002, 100],
+    ];
+    const landmarks = Array.from({ length: 12 }, (_, index) => {
+      const name = `Crossing ${String(index + 1).padStart(2, '0')}`;
+      return `<wpt lat="0" lon="0.001"><name>${name}</name></wpt>`;
+    }).join('');
+    if (font === 'wide') {
+      await page.addStyleTag({ content: ':root { font-family: Verdana, sans-serif; }' });
+    }
+    await importText(page, gpx(crossing, landmarks));
+    await confirmRoute(page);
+    await expect(
+      page.getByText(
+        'To add: choose a position on the map or profile, then select Add station. To move: select a station, choose a new position, then select Move to cursor.',
+        { exact: true },
+      ),
+    ).toHaveCount(0);
+    const rows = page.locator('.station-row');
+    await expect(rows).toHaveCount(14);
+    await expect(rows.filter({ hasText: 'Position needs confirmation' })).toHaveCount(12);
+    const pending = page.getByRole('list', { name: 'Unconfirmed stations', exact: true });
+    const last = rows.filter({ hasText: 'Crossing 12' });
+    const pendingLast = pending.getByRole('button', { name: /Crossing 12/ });
+    await expect(pendingLast).toContainText(/\d+\.\d{2} km/);
+    await pendingLast.click();
+    await expect(last).toBeFocused();
+    await expect(last).toBeInViewport({ ratio: 1 });
+    await expect(last).toHaveAttribute('aria-expanded', 'true');
+    await expect(last).toContainText('Collapse editor');
+    const name = page.getByLabel('Name', { exact: true });
+    const next = page.getByRole('button', { name: 'Next unconfirmed station', exact: true });
+    await expect(name).toHaveValue('Crossing 12');
+    const selectedDistance = Number(
+      await page.getByLabel('Along-route distance (m)', { exact: true }).inputValue(),
+    );
+    await expect
+      .poll(async () =>
+        Number(
+          await page.getByRole('slider', { name: 'Route progress', exact: true }).inputValue(),
+        ),
+      )
+      .toBeCloseTo(selectedDistance, 0);
+    if (isMobile) await page.getByRole('button', { name: 'Collapse preview', exact: true }).click();
+    await expect(name).toBeInViewport({ ratio: 1 });
+    await last.click();
+    await expect(last).toHaveAttribute('aria-expanded', 'false');
+    await expect(last).toContainText('Expand to edit');
+    await expect(name).toHaveCount(0);
+    await last.press('Enter');
+    await expect(last).toHaveAttribute('aria-expanded', 'true');
+    await expect(name).toHaveValue('Crossing 12');
+    await last.press('Space');
+    await expect(last).toHaveAttribute('aria-expanded', 'false');
+    await expect(name).toHaveCount(0);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await last.press('Enter');
+    await expect(name).toHaveValue('Crossing 12');
+    await expect(name).toBeVisible();
+    expect(
+      await page.locator('.station-editor-reveal').evaluate((el) => {
+        const style = getComputedStyle(el);
+        return (
+          style.animationName === 'none' ||
+          style.animationDuration.split(',').every((duration) => {
+            const value = Number.parseFloat(duration);
+            return (duration.trim().endsWith('ms') ? value / 1000 : value) <= 0.001;
+          })
+        );
+      }),
+    ).toBe(true);
+    await pending.getByRole('button', { name: /Crossing 01/ }).click();
+    const first = rows.filter({ hasText: 'Crossing 01' });
+    await expect(first).toBeFocused();
+    await expect(first).toHaveAttribute('aria-expanded', 'true');
+    await expect(last).toHaveAttribute('aria-expanded', 'false');
+    await expect(name).toHaveValue('Crossing 01');
+    await expect(page.locator('.station-editor')).toHaveCount(1);
+    const editorId = await first.getAttribute('aria-controls');
+    expect(editorId).not.toBeNull();
+    await expect(
+      page.locator('.station-item').filter({ has: first }).locator('.station-editor'),
+    ).toHaveAttribute('id', editorId!);
+    await next.click();
+    await expect(name).toHaveValue('Crossing 02');
+    await page.getByRole('button', { name: 'Confirm station position', exact: true }).click();
+    await expect(rows.filter({ hasText: 'Crossing 02' })).not.toContainText(
+      'Position needs confirmation',
+    );
+    await expect(rows.filter({ hasText: 'Position needs confirmation' })).toHaveCount(11);
+    await expect(pending.getByRole('button', { name: /Crossing 02/ })).toHaveCount(0);
+    await next.click();
+    await expect(name).toHaveValue('Crossing 03');
+    await rows.filter({ hasText: 'Crossing 12' }).click();
+    await next.click();
+    await expect(name).toHaveValue('Crossing 01');
+    await next.click();
+    await expect(name).toHaveValue('Crossing 03');
+    await expect(rows).toHaveCount(14);
+    await expect(page.getByRole('button', { name: 'Next: Elevation', exact: true })).toBeDisabled();
+    await noOverflow(page);
+  });
+}
 
 test('keeps advanced elevation settings visible and preserves their values', async ({ page }) => {
   await importText(page, gpx(complete));

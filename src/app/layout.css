@@ -251,6 +251,11 @@ body,
     padding: 16px;
   }
 
+  /* Leave room for station metadata with wider system fonts and scrollbars. */
+  .studio--editing .station-row-actions {
+    max-width: 64px;
+  }
+
   .studio--editing .panel-footer {
     padding: 10px 12px;
   }

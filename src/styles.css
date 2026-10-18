@@ -1001,9 +1001,17 @@ h1 {
 .station-disclosure {
   display: flex;
   align-items: center;
-  gap: 3px;
+  justify-content: flex-end;
+  gap: 2px;
+  width: 100%;
   font-size: 12px;
   color: var(--muted);
+}
+
+.station-disclosure > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
 }
 
 .station-disclosure svg {
