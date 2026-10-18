@@ -48,9 +48,18 @@ test('expanded processing notes can scroll to their final item at the reported w
     ),
   });
   await expect(page.locator('.issue[data-code="LARGE_SOURCE_EDGE"]')).toBeVisible();
+  await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#step-progress-help')).toHaveText(
+    'Confirm the route and direction to continue.',
+  );
   const notes = page.locator('.issues-list');
   await expect(notes.locator('summary')).toHaveCount(0);
   await expect(notes.locator('.issue').first()).toBeVisible();
+  const confirmation = page.getByRole('checkbox', {
+    name: 'I have checked the route and direction on the map.',
+  });
+  await expect(confirmation).toBeInViewport();
+  const confirmationTop = (await confirmation.boundingBox())!.y;
   const body = page.locator('.panel-body');
   const dimensions = await body.evaluate((el) => ({
     height: el.clientHeight,
@@ -77,14 +86,9 @@ test('expanded processing notes can scroll to their final item at the reported w
         }),
     )
     .toBe(true);
-  const confirmation = page.getByRole('checkbox', {
-    name: 'I have checked the route and direction on the map.',
-  });
   await expect(confirmation).toBeInViewport();
-  expect((await confirmation.boundingBox())!.y).toBeGreaterThanOrEqual(
-    (await notes.boundingBox())!.y + (await notes.boundingBox())!.height,
-  );
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeVisible();
+  expect((await confirmation.boundingBox())!.y).toBe(confirmationTop);
+  await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeInViewport();
   await expectWindowSizedEditor(page);
   await page.screenshot({
     path: testInfo.outputPath('processing-notes-scroll.png'),
@@ -95,6 +99,17 @@ test('expanded processing notes can scroll to their final item at the reported w
 test('editing stays inside the window when settings expand or the window is resized', async ({
   page,
 }) => {
+  await expect(
+    page.getByRole('heading', { name: 'Route simplification', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole('combobox', { name: 'Declination source', exact: true })
+    .selectOption('manual');
+  await page.getByRole('checkbox', { name: 'Include magnetic declination', exact: true }).check();
+  await expect(page.getByLabel('Declination (°)', { exact: true })).toBeVisible();
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 865, height: 827 },
@@ -104,9 +119,6 @@ test('editing stays inside the window when settings expand or the window is resi
     { width: 390, height: 667 },
   ]) {
     await page.setViewportSize(viewport);
-    for (const details of await page.locator('.advanced').all()) {
-      if ((await details.getAttribute('open')) === null) await details.locator('summary').click();
-    }
     const body = page.locator('.panel-body');
     // Resizing and async content can change overflow before keyboard scrolling settles.
     await expect
@@ -120,6 +132,100 @@ test('editing stays inside the window when settings expand or the window is resi
     await page
       .getByLabel('Route name', { exact: true })
       .fill('A route name that is much longer than the available title space '.repeat(3));
+    await expectWindowSizedEditor(page);
+  }
+});
+
+test('short phones keep confirmation and navigation visible while route fields remain usable', async ({
+  page,
+}) => {
+  await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#step-progress-help')).toHaveText(
+    'Confirm the route and direction to continue.',
+  );
+  for (const height of [480, 568]) {
+    await page.setViewportSize({ width: 390, height });
+    await expect(page.locator('.panel-footer .check-field')).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('#step-progress-help')).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+    const name = page.getByLabel('Route name', { exact: true });
+    await name.scrollIntoViewIfNeeded();
+    await name.focus();
+    await expect(name).toBeFocused();
+    await expect(name).toBeInViewport({ ratio: 1 });
+    await expect
+      .poll(() =>
+        name.evaluate((el) => {
+          const input = el.getBoundingClientRect();
+          const body = el.closest('.panel-body')!.getBoundingClientRect();
+          return (
+            body.height >= input.height &&
+            input.top >= body.top - 1 &&
+            input.bottom <= body.bottom + 1
+          );
+        }),
+      )
+      .toBe(true);
+    const body = page.locator('.panel-body');
+    const expandedHeight = (await body.boundingBox())!.height;
+    const collapse = page.getByRole('button', { name: 'Collapse preview', exact: true });
+    await expect(collapse).toBeInViewport({ ratio: 1 });
+    await collapse.click();
+    await expect
+      .poll(async () => (await body.boundingBox())!.height)
+      .toBeGreaterThan(expandedHeight + 80);
+    await expectWindowSizedEditor(page);
+    await page.getByRole('button', { name: 'Expand preview', exact: true }).click();
+  }
+});
+
+test('short phones keep KML elevation confirmation fixed and usable with the keyboard', async ({
+  page,
+}) => {
+  await page.getByLabel('Choose route file', { exact: true }).setInputFiles({
+    name: 'hill.kml',
+    mimeType: 'application/xml',
+    buffer: Buffer.from(
+      '<kml xmlns="http://www.opengis.net/kml/2.2"><Placemark><name>KML hill</name><LineString><coordinates>0,0,100 0.0001,0,110 0.0002,0,120</coordinates></LineString></Placemark></kml>',
+    ),
+  });
+  await expect(page.getByLabel('Route name', { exact: true })).toHaveValue('KML hill');
+  await page
+    .getByRole('checkbox', { name: 'I have checked the route and direction on the map.' })
+    .check();
+  await page.getByRole('button', { name: 'Next: Stations', exact: true }).click();
+  await page.getByRole('button', { name: 'Next: Elevation', exact: true }).click();
+  const footer = page.locator('.panel-footer');
+  const acceptance = footer.getByRole('checkbox', { name: /I confirm these values/ });
+  const next = page.getByRole('button', { name: 'Next: Review', exact: true });
+  const body = page.locator('.panel-body');
+  for (const height of [480, 568]) {
+    await page.setViewportSize({ width: 390, height });
+    await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+    await expect(footer.locator('.check-field')).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('#step-progress-help')).toBeInViewport({ ratio: 1 });
+    await expect(next).toBeInViewport({ ratio: 1 });
+    await expect(next).toBeDisabled();
+    await expect(acceptance).not.toBeChecked();
+    expect(await body.evaluate((el) => el.clientHeight)).toBeGreaterThan(0);
+    const confirmationTop = (await acceptance.boundingBox())!.y;
+    await body.press('End');
+    await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await expect(footer.locator('.check-field')).toBeInViewport({ ratio: 1 });
+    expect((await acceptance.boundingBox())!.y).toBe(confirmationTop);
+    await acceptance.focus();
+    await expect(acceptance).toBeFocused();
+    await acceptance.press('Space');
+    await expect(acceptance).toBeChecked();
+    await expect(next).toBeEnabled();
+    await acceptance.press('Space');
+    await expect(acceptance).not.toBeChecked();
+    await expect(next).toBeDisabled();
     await expectWindowSizedEditor(page);
   }
 });
@@ -229,6 +335,25 @@ test('phone preview can be collapsed for editing and reopened without losing the
     .toBeLessThan(2);
   await expectWindowSizedEditor(page);
   await page.screenshot({ path: testInfo.outputPath('phone-editor.png'), fullPage: true });
+  await page
+    .getByRole('checkbox', { name: 'I have checked the route and direction on the map.' })
+    .check();
+  await page.getByRole('button', { name: 'Next: Stations', exact: true }).click();
+  await expect(page.locator('.panel-heading h2')).toHaveText('Stations');
+  await expect(page.getByRole('button', { name: 'Expand preview', exact: true })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  await expect(page.getByRole('button', { name: 'Map', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.locator('.map-panel')).toBeHidden();
+  await page.getByRole('button', { name: 'Expand preview', exact: true }).click();
+  await expect(page.locator('.map-panel')).toBeVisible();
+  await expect(progress).toHaveValue('8000');
+  await page.getByRole('button', { name: 'Profile', exact: true }).click();
+  await page.getByRole('button', { name: 'Collapse preview', exact: true }).click();
   // View selection also reopens the preview, including after a breakpoint change.
   await page.setViewportSize({ width: 865, height: 827 });
   await expect(page.locator('.profile-panel')).toBeVisible();
@@ -248,18 +373,50 @@ test('the import screen scrolls inside the shell on a short phone', async ({ pag
     .getByRole('navigation')
     .getByRole('button', { name: /Import/ })
     .click();
-  await page.locator('.privacy-note').scrollIntoViewIfNeeded();
+  await page.locator('.file-types').scrollIntoViewIfNeeded();
   const bounds = await page.evaluate(() => ({
     height: innerHeight,
     content: document.documentElement.scrollHeight,
     scroll: window.scrollY,
     mainScroll: document.querySelector('.main-shell')!.scrollTop,
-    noteBottom: document.querySelector('.privacy-note')!.getBoundingClientRect().bottom,
+    formatsBottom: document.querySelector('.file-types')!.getBoundingClientRect().bottom,
   }));
   expect(bounds.content).toBeLessThanOrEqual(bounds.height + 1);
   expect(bounds.scroll).toBe(0);
   expect(bounds.mainScroll).toBeGreaterThan(0);
-  expect(bounds.noteBottom).toBeLessThanOrEqual(bounds.height + 1);
+  expect(bounds.formatsBottom).toBeLessThanOrEqual(bounds.height + 1);
   await page.getByRole('button', { name: 'Choose a file', exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByRole('button', { name: 'Choose a file', exact: true })).toBeInViewport();
+});
+
+test('the import card and stepper align with the editing workspace on desktop and phone', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1561, height: 1344 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await expect(
+      page.getByRole('heading', { name: 'Import route file', exact: true }),
+    ).toBeVisible();
+    await expect(page.locator('.privacy-note')).toHaveCount(0);
+    await expect(
+      page.getByText('Files are processed on this device and are not uploaded.', { exact: true }),
+    ).toHaveCount(0);
+    const landingSteps = (await page.locator('.stepper').boundingBox())!;
+    const card = (await page.locator('.import-layout').boundingBox())!;
+    expect(Math.abs(card.x - landingSteps.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(card.width - landingSteps.width)).toBeLessThanOrEqual(1);
+    await page
+      .getByLabel('Choose route file', { exact: true })
+      .setInputFiles(
+        fileURLToPath(new URL('../fixtures/routes/2026MY/EMY20K.gpx', import.meta.url)),
+      );
+    await expect(page.getByLabel('Route name', { exact: true })).toBeVisible();
+    const editorSteps = (await page.locator('.stepper').boundingBox())!;
+    for (const dimension of ['x', 'y', 'width', 'height'] as const)
+      expect(Math.abs(editorSteps[dimension] - landingSteps[dimension])).toBeLessThanOrEqual(1);
+  }
 });

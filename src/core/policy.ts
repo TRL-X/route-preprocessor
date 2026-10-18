@@ -21,7 +21,7 @@ export const PROCESSING_CHOICES = Object.freeze({
 
 // Keep the common geometry control narrower than the accepted processing range.
 export const PROCESSING_CONTROLS = Object.freeze({
-  geometryToleranceM: { min: PROCESSING_RANGES.geometryToleranceM.min, max: 50, step: 0.5 },
+  geometryToleranceM: { min: 1, max: 5, step: 0.5 },
 } as const);
 
 /** Browser budgets, separate from the RTE format and reader limits. */

@@ -21,6 +21,7 @@ export function useRouteProcessing(
     status: 'loading' | 'available' | 'unavailable';
   } | null>(null);
   const [retry, setRetry] = useState(0);
+  const reference = editor?.reference;
   const declinationMode =
     editor?.declinationMode ?? (editor?.magneticDeclination ? 'manual' : 'omit');
   const declinationDate = editor?.declinationQueryDate ?? '';
@@ -73,11 +74,10 @@ export function useRouteProcessing(
   }, [editor, revision]);
 
   useEffect(() => {
-    if (!editor || declinationMode !== 'auto') {
+    if (!reference || declinationMode !== 'auto') {
       setLookup(null);
       return;
     }
-    const reference = editor.reference;
     const controller = new AbortController();
     setLookup({ reference, date: declinationDate, status: 'loading' });
     setEditor((previous) =>
@@ -97,7 +97,7 @@ export function useRouteProcessing(
       setLookup({ reference, date: declinationDate, status: value ? 'available' : 'unavailable' });
     });
     return () => controller.abort();
-  }, [editor?.reference, declinationMode, declinationDate, retry, setEditor]);
+  }, [reference, declinationMode, declinationDate, retry, setEditor]);
 
   const currentResult = !!editor && processed?.editor === editor && processed.revision === revision;
   return {

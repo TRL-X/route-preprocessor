@@ -1,6 +1,6 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { hex, importRouteFile, prepareRouteExport } from '../../src/app/route-files';
+import { hex, importRouteFile, prepareRouteExport, rebuildRoute } from '../../src/app/route-files';
 import { reserveExportRevision, RevisionExhaustedError } from '../../src/app/drafts';
 import type { Editor } from '../../src/app/editor';
 import { runWorkerTask } from '../../src/app/worker-client';
@@ -51,6 +51,18 @@ beforeEach(() => {
         decodeRte(bytes);
         return bytes as T;
       }
+      if (task.type === 'import') {
+        const file = parseRouteFile(task.text, task.fileName);
+        const reference = buildReference(file.routes[0]);
+        return { file, reference, stations: createStations(reference, file.landmarks) } as T;
+      }
+      if (task.type === 'reference') {
+        const reference = buildReference(task.source, {
+          reverse: task.reverse,
+          startIndex: task.startIndex,
+        });
+        return { reference, stations: createStations(reference, task.landmarks) } as T;
+      }
       throw new Error(`Unexpected worker task: ${task.type}`);
     },
   );
@@ -62,6 +74,118 @@ afterEach(() => {
 });
 
 describe('route file operations', () => {
+  it.each<{
+    name: string;
+    elevations: (number | null)[];
+    mode: 'source' | 'interpolate';
+    exportable: boolean;
+    filled: boolean;
+  }>([
+    {
+      name: 'complete positive heights',
+      elevations: [100, 110, 120],
+      mode: 'source',
+      exportable: true,
+      filled: false,
+    },
+    {
+      name: 'complete zero and negative heights',
+      elevations: [0, -10, 5],
+      mode: 'source',
+      exportable: true,
+      filled: false,
+    },
+    {
+      name: 'missing interior heights',
+      elevations: [100, null, 120],
+      mode: 'interpolate',
+      exportable: true,
+      filled: true,
+    },
+    {
+      name: 'missing endpoint heights',
+      elevations: [null, 110, 120],
+      mode: 'interpolate',
+      exportable: false,
+      filled: false,
+    },
+    {
+      name: 'missing whole-route heights',
+      elevations: [null, null, null],
+      mode: 'interpolate',
+      exportable: false,
+      filled: false,
+    },
+  ])(
+    'selects the import elevation default for $name without relaxing validation',
+    async ({ elevations, mode, exportable, filled }) => {
+      const points = elevations
+        .map(
+          (elevation, index) =>
+            `<trkpt lat="0" lon="${index * 0.001}">${elevation === null ? '' : `<ele>${elevation}</ele>`}</trkpt>`,
+        )
+        .join('');
+      const editor = await importRouteFile(
+        new File(
+          [`<gpx><trk><name>Trail</name><trkseg>${points}</trkseg></trk></gpx>`],
+          'trail.gpx',
+        ),
+        new AbortController().signal,
+      );
+      expect(editor.options.elevationMode).toBe(mode);
+      const result = processRoute(editor.reference, editor.stations, editor.options, {
+        routeId: editor.routeId,
+        revision: 1,
+        name: editor.name,
+      });
+      if (exportable) {
+        expect(result.route?.elevationInfo.containsFilledValues).toBe(filled);
+        expect(result.issues.some((issue) => issue.severity === 'error')).toBe(false);
+      } else {
+        expect(result.route).toBeNull();
+        expect(result.issues).toContainEqual(
+          expect.objectContaining({ code: 'INCOMPLETE_ELEVATION', severity: 'error' }),
+        );
+      }
+    },
+  );
+
+  it('uses normalized missing heights when selecting the import default', async () => {
+    const editor = await importRouteFile(
+      new File(
+        [
+          '<gpx><trk><trkseg>' +
+            '<trkpt lat="0" lon="0"><ele>100</ele></trkpt>' +
+            '<trkpt lat="0" lon="0.001"><ele>110</ele></trkpt>' +
+            '<trkpt lat="0" lon="0.001"><ele>120</ele></trkpt>' +
+            '<trkpt lat="0" lon="0.002"><ele>130</ele></trkpt>' +
+            '</trkseg></trk></gpx>',
+        ],
+        'conflict.gpx',
+      ),
+      new AbortController().signal,
+    );
+    expect(editor.file.routes[0].points.every((point) => point.elevation !== null)).toBe(true);
+    expect(editor.reference.points.some((point) => point.elevation === null)).toBe(true);
+    expect(editor.options.elevationMode).toBe('interpolate');
+  });
+
+  it.each(['source', 'interpolate'] as const)(
+    'preserves an existing %s choice when rebuilding a route with missing heights',
+    async (elevationMode) => {
+      const { editor } = fixture();
+      const file = parseRouteFile(
+        '<gpx><trk><trkseg><trkpt lat="0" lon="0"><ele>100</ele></trkpt><trkpt lat="0" lon="0.001"/><trkpt lat="0" lon="0.002"><ele>120</ele></trkpt></trkseg></trk></gpx>',
+        'gaps.gpx',
+      );
+      const previous = { ...editor, file, options: { ...editor.options, elevationMode } };
+      const rebuilt = await rebuildRoute(previous, 0, true, 0, new AbortController().signal);
+      expect(rebuilt.reference.points.some((point) => point.elevation === null)).toBe(true);
+      expect(rebuilt.options).toBe(previous.options);
+      expect(rebuilt.options.elevationMode).toBe(elevationMode);
+    },
+  );
+
   it('reuses identical export bytes and advances the revision after an edit', async () => {
     const { editor, route } = fixture();
     const signal = new AbortController().signal;

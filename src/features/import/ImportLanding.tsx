@@ -1,6 +1,6 @@
 import { useLocale } from '../../i18n/useLocale';
 import { useState } from 'react';
-import { ArrowRight, FileUp, RotateCcw, ShieldCheck } from 'lucide-react';
+import { ArrowRight, FileUp, RotateCcw } from 'lucide-react';
 
 export interface ImportLandingProps {
   busy: boolean;
@@ -63,10 +63,6 @@ export default function ImportLanding({
             <ArrowRight size={18} />
           </button>
         )}
-        <div className="privacy-note">
-          <ShieldCheck size={19} />
-          <span>{t('import.privacyNote')}</span>
-        </div>
       </div>
     </section>
   );
