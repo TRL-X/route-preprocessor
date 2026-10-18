@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { STEPS, type Step } from './app/flow';
 import type { Editor } from './app/editor';
-import { downloadQualityReport } from './app/route-files';
+import { downloadQualityReport, routeFilename } from './app/route-files';
 import { useEditorSession } from './app/useEditorSession';
 import { useRouteFiles } from './app/useRouteFiles';
 import { useRouteProcessing } from './app/useRouteProcessing';
@@ -45,6 +45,7 @@ import IssuesList from './features/review/IssuesList';
 import { issueStage, issuesForStep } from './features/review/issue-visibility';
 import StageList from './features/review/StageList';
 import MagneticDeclinationFields from './components/MagneticDeclinationFields';
+import BluetoothUpload from './features/export/BluetoothUpload';
 
 const RouteMap = lazy(() => import('./components/RouteMap'));
 
@@ -67,7 +68,9 @@ export default function App() {
     retryDeclination,
   } = useRouteProcessing(editor, session.setEditor, currentRevision);
   const files = useRouteFiles(session);
-  const { busy, notice, exported } = files;
+  const { notice, exported } = files;
+  const [deviceBusy, setDeviceBusy] = useState(false);
+  const busy = !!files.busy || deviceBusy;
   const error = files.error || session.loadError;
   const clearError = () => {
     files.clearError();
@@ -164,7 +167,7 @@ export default function App() {
   }, [!!editor, step]);
 
   function edit(update: (previous: Editor) => Editor) {
-    if (files.isBusy()) return;
+    if (busy || files.isBusy()) return;
     const change = session.edit(update);
     if (!change) return;
     const { previous, next } = change;
@@ -203,6 +206,7 @@ export default function App() {
     setStep('route');
   }
   async function importFile(file: File) {
+    if (busy) return;
     if (await files.importFile(file)) resetEditorView();
   }
   function restoreDraft() {
@@ -397,10 +401,10 @@ export default function App() {
             </button>
           </div>
         )}
-        {busy && (
+        {files.busy && (
           <div className="busy-banner" role="status">
             <LoaderCircle size={18} className="spin" />
-            <span>{uiText(busy)}</span>
+            <span>{uiText(files.busy)}</span>
             <button className="text-button" onClick={files.cancel}>
               {t('app.cancel')}
             </button>
@@ -1020,6 +1024,15 @@ export default function App() {
                       </label>
                     )}
                   </fieldset>
+                  {step === 'export' && (
+                    <BluetoothUpload
+                      ready={!!ready}
+                      disabled={!!files.busy}
+                      filename={routeFilename(editor.name)}
+                      prepareExport={(signal) => files.prepareExport(route, !!ready, signal)}
+                      onBusyChange={setDeviceBusy}
+                    />
+                  )}
                 </div>
                 <div className="panel-footer">
                   <button

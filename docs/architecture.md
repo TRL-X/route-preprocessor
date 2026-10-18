@@ -20,6 +20,7 @@ layouts share the same editing model and processing rules.
 | `src/app/drafts.ts`                   | IndexedDB drafts and export revision reservations                   |
 | `src/i18n`                            | Locale discovery, preferences, typed messages and formatting        |
 | `src/features`                        | Workflow controls, issue visibility and stage summaries             |
+| `src/device`                          | mcumgr SMP frames, CBOR and browser Bluetooth file transport        |
 | `src/components/RouteMap.tsx`         | MapLibre rendering and route/station interaction                    |
 | `src/components/ElevationChart.tsx`   | Profile rendering and linked cursor                                 |
 | `src/workers/route.worker.ts`         | Import, reference, processing and export task entry points          |
@@ -58,7 +59,7 @@ File bytes -> SHA-256 and decoding -> import worker
                                           |
                                    ProcessingResult
                                           |
-                         Revision reservation -> encode -> decode -> download
+                         Revision reservation -> encode -> decode -> download / BLE upload
 ```
 
 Parsed source points and landmarks remain separate from editing parameters and
@@ -72,6 +73,14 @@ user confirmations determine whether a step can be completed. Export requires a
 result for the current editor state, no blocking issues or active tasks, and a
 confirmed route and direction. Station confirmations also participate in
 processing. Changes invalidate affected later steps.
+
+The Bluetooth upload card shares the same export preparation and revision
+reservation as downloads. During a transfer, route editing and navigation are
+locked while the card's cancel button remains available. The transport handles
+SMP notifications, acknowledgements, timeouts and disconnects separately from
+the RTE codec. Its CBOR codec supports string keys without relaxing the restricted
+RTE metadata profile. The configured device directory is an origin-local
+preference; Bluetooth device permissions are managed by the browser.
 
 Processing runs after a 120 ms debounce. Each task has its own worker, which is
 terminated on completion or cancellation. The client discards stale results using

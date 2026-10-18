@@ -32,7 +32,8 @@ npm run preview
    whole-route elevation must be corrected in the source file.
 5. Inspect the linked map and elevation profile, stage statistics and processing
    issues. The original profile remains available for comparison.
-6. Export the `.rte` file after encoding and a full validation pass. A separate
+6. Export the `.rte` file after encoding and a full validation pass, or upload it
+   directly to a device over Bluetooth. A separate
    processing report records the input hash, settings and diagnostics.
 
 The editor preserves parsed source data, supports undo and saves a local draft in
@@ -49,6 +50,31 @@ OpenFreeMap Liberty by default. To use another public style, copy `.env.example`
 to `.env.local` and set `VITE_MAP_STYLE_URL` there, or set it in the hosting
 environment. A local route preview is available when the map cannot load or WebGL
 is unavailable.
+
+## Bluetooth upload
+
+On the Export step, use **Connect device**, select a device exposing the mcumgr
+SMP Bluetooth service, and choose **Upload route**. The validated RTE bytes go
+directly from the browser to the device; no server or nRF app is needed. The
+target directory defaults to `/SD:/routes/` and is saved in this browser. The
+generated `.rte` filename is appended to that directory. Create the directory on
+the device first; uploading overwrites an existing file of the same name.
+
+Use Chrome on Windows, macOS, ChromeOS or Android, over HTTPS (or localhost for
+development). Browser access requires selecting the device in a permission
+prompt. Safari and Firefox do not natively support this upload flow; the download
+option remains available. Keep the page open and the device nearby during the
+transfer. Cancelled or interrupted transfers can leave a partial file; reconnect
+and upload again from the beginning.
+
+The firmware must support mcumgr filesystem uploads over BLE, not only firmware
+image updates. See the [SMP Bluetooth transport](https://docs.zephyrproject.org/latest/services/device_mgmt/smp_transport.html)
+and [filesystem management](https://docs.zephyrproject.org/latest/services/device_mgmt/smp_groups/smp_group_8.html)
+specifications. This client uses 20-byte GATT writes, so Zephyr firmware needs
+`CONFIG_MCUMGR_TRANSPORT_BT_REASSEMBLY=y` and
+`CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE` of at least 256 bytes to reassemble SMP
+requests. Transfers report progress from device acknowledgements, and only
+report success after the device acknowledges the complete file.
 
 ## Verification
 
@@ -120,7 +146,7 @@ docs/           Implementation and maintenance notes
 ## Scope
 
 The editor processes one continuous route at a time. It does not join disconnected
-segments, fetch DEM elevation, snap routes to roads or synchronize with devices or
-cloud storage. Distance uses a fixed-radius spherical model, described in the
+segments, fetch DEM elevation, snap routes to roads or synchronize with cloud
+storage. Distance uses a fixed-radius spherical model, described in the
 preprocessing notes. The application has no offline installation or navigation
 mode.

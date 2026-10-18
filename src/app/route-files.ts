@@ -31,6 +31,15 @@ export interface PreparedExport {
   persisted: boolean;
 }
 
+export function routeFilename(name: string): string {
+  return (
+    (name
+      .trim()
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+      .slice(0, 80) || 'route') + '.rte'
+  );
+}
+
 export async function importRouteFile(file: File, signal: AbortSignal): Promise<Editor> {
   if (!/\.(gpx|kml)$/i.test(file.name)) throw new Error('app.unsupportedFileType');
   if (file.size > IMPORT_LIMITS.maxBytes) throw new Error('app.fileTooLarge');
@@ -116,11 +125,7 @@ export async function prepareRouteExport(
       ? canonical
       : await encode({ ...route, routeId: outputId, revision });
   signal.throwIfAborted();
-  const filename =
-    (editor.name
-      .trim()
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-      .slice(0, 80) || 'route') + '.rte';
+  const filename = routeFilename(editor.name);
   return {
     bytes,
     exported: { filename, bytes: bytes.length, revision, routeId: hex(outputId) },

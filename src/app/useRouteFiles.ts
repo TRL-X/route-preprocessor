@@ -33,17 +33,23 @@ export function useRouteFiles(
   async function run<T>(
     label: string,
     action: (signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T | undefined> {
     if (operation.current) return;
     const controller = new AbortController();
     operation.current = controller;
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) controller.abort();
     setBusy(label);
     setError('');
     try {
+      controller.signal.throwIfAborted();
       return await action(controller.signal);
     } catch (error) {
       if (!isCancelled(error)) setError(errorText(error));
     } finally {
+      signal?.removeEventListener('abort', abort);
       operation.current = null;
       setBusy('');
     }
@@ -73,18 +79,29 @@ export function useRouteFiles(
     );
   }
 
-  async function exportRoute(route: RouteData | null, ready: boolean) {
+  async function prepareExport(route: RouteData | null, ready: boolean, signal?: AbortSignal) {
     const editor = session.editor;
     if (!editor || !route || !ready) return;
-    await run('app.exportingRoute', async (signal) => {
-      const output = await prepareRouteExport(editor, route, session.ledger, signal);
-      signal.throwIfAborted();
-      await session.saveExport(editor, output.ledger);
-      signal.throwIfAborted();
-      download(output.bytes, output.exported.filename);
-      setExported(output.exported);
-      setNotice(output.persisted ? 'app.exportSuccess' : 'app.exportWithNewIdentity');
-    });
+    return run(
+      'app.exportingRoute',
+      async (signal) => {
+        const output = await prepareRouteExport(editor, route, session.ledger, signal);
+        signal.throwIfAborted();
+        await session.saveExport(editor, output.ledger);
+        signal.throwIfAborted();
+        setExported(output.exported);
+        if (!output.persisted) setNotice('app.exportWithNewIdentity');
+        return output;
+      },
+      signal,
+    );
+  }
+
+  async function exportRoute(route: RouteData | null, ready: boolean) {
+    const output = await prepareExport(route, ready);
+    if (!output) return;
+    download(output.bytes, output.exported.filename);
+    setNotice(output.persisted ? 'app.exportSuccess' : 'app.exportWithNewIdentity');
   }
 
   return {
@@ -95,6 +112,7 @@ export function useRouteFiles(
     importFile,
     rebuild,
     exportRoute,
+    prepareExport,
     clearError: () => setError(''),
     cancel: () => operation.current?.abort(),
     isBusy: () => operation.current !== null,
