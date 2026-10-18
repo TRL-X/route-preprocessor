@@ -65,12 +65,47 @@ export function parseRouteFile(xml: string, fileName: string): ImportedFile {
   // Limit nesting before building an object tree, including files without coordinates.
   let depth = 0;
   let tags = 0;
-  for (const match of withoutData.matchAll(/<\/?[A-Za-z_][^>]*>/g)) {
+  for (let index = 0; index < xml.length;) {
+    const start = xml.indexOf('<', index);
+    if (start === -1) break;
+    // Skip each non-element token in place: markers inside it are just text.
+    const delimiter = xml.startsWith('<!--', start)
+      ? '-->'
+      : xml.startsWith('<![CDATA[', start)
+        ? ']]>'
+        : null;
+    if (delimiter) {
+      const end = xml.indexOf(delimiter, start + (delimiter === '-->' ? 4 : 2));
+      if (end === -1) throw new Error('Invalid XML: unterminated non-element token.');
+      index = end + delimiter.length;
+      continue;
+    }
+    if (xml[start + 1] === '!') throw new Error('Invalid XML: unsupported declaration.');
+    // Match the parser's quote-aware tag and processing-instruction boundaries.
+    // A quoted /> does not make an element self-closing.
+    const instruction = xml[start + 1] === '?';
+    let quote = '';
+    let end = start + 1;
+    for (; end < xml.length; end++) {
+      const character = xml[end];
+      if (quote) {
+        if (character === quote) quote = '';
+      } else if (character === '"' || character === "'") quote = character;
+      else if (character === '>' && (!instruction || xml[end - 1] === '?')) break;
+    }
+    if (end === xml.length) throw new Error('Invalid XML: unterminated tag.');
+    index = end + 1;
+    if (instruction) continue;
     if (++tags > IMPORT_LIMITS.maxXmlElements)
       throw new Error('The XML contains too many elements.');
-    if (match[0].startsWith('</')) depth--;
-    else if (!match[0].endsWith('/>') && ++depth > IMPORT_LIMITS.maxXmlDepth)
-      throw new Error(`XML nesting exceeds ${IMPORT_LIMITS.maxXmlDepth} levels.`);
+    if (xml[start + 1] === '/') {
+      if (xml[end - 1] === '/' || --depth < 0)
+        throw new Error('Invalid XML: unexpected closing tag.');
+    } else {
+      if (++depth > IMPORT_LIMITS.maxXmlDepth)
+        throw new Error(`XML nesting exceeds ${IMPORT_LIMITS.maxXmlDepth} levels.`);
+      if (xml[end - 1] === '/') depth--;
+    }
   }
   const root = object(
     new XMLParser({
@@ -82,6 +117,7 @@ export function parseRouteFile(xml: string, fileName: string): ImportedFile {
       trimValues: false,
       processEntities: true,
       htmlEntities: false,
+      maxNestedTags: IMPORT_LIMITS.maxXmlDepth,
     }).parse(xml),
   );
   const roots = Object.keys(root).filter((key) => !key.startsWith('?'));
