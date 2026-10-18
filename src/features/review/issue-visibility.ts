@@ -21,6 +21,10 @@ export function issuesForStep(
     if (automaticResults.has(issue.code) && issue.severity !== 'error') return false;
     // Final review and export show only problems that still block the output.
     if (step === 'preview' || step === 'export') return issue.severity === 'error';
+    // The pending-stations list already presents every position that needs confirmation.
+    if (step === 'stations' && issue.code === 'STATION_UNCONFIRMED') return false;
+    // The elevation status and fixed footer already present the required confirmation.
+    if (step === 'elevation' && issue.code === 'ELEVATION_UNCONFIRMED') return false;
     const owner = issueStage(issue, options);
     if (owner !== 'all' && owner !== step) return false;
     if (owner === 'all') return issue.severity === 'error';

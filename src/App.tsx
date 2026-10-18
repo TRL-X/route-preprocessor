@@ -7,6 +7,7 @@ import {
   ArrowDownToLine,
   ArrowLeft,
   ArrowRight,
+  Bluetooth,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -48,10 +49,11 @@ import { useRouteFiles } from './app/useRouteFiles';
 import { useRouteProcessing } from './app/useRouteProcessing';
 import { positionAt } from './core/process';
 import { utcToday } from './core/declination';
-import { PROCESSING_CHOICES, PROCESSING_CONTROLS } from './core/policy';
+import { PROCESSING_CONTROLS, PROCESSING_DEFAULTS } from './core/policy';
 import type { DraftStation, ProcessingIssue, ProcessingOptions } from './core/types';
 import ElevationChart from './components/ElevationChart';
 import ImportLanding from './features/import/ImportLanding';
+import ElevationSettings from './features/elevation/ElevationSettings';
 import IssuesList from './features/review/IssuesList';
 import { issuesForStep } from './features/review/issue-visibility';
 import StageList from './features/review/StageList';
@@ -95,6 +97,7 @@ export default function App() {
   const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
   const [cursorS, setCursorS] = useState<number | null>(null);
   const [compareSource, setCompareSource] = useState(true);
+  const [devicePanelOpen, setDevicePanelOpen] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const [stackedPreview, setStackedPreview] = useState(false);
   const [activeView, setActiveView] = useState<'map' | 'profile'>('map');
@@ -112,13 +115,22 @@ export default function App() {
     ? [...editor.stations].sort((a, b) => a.s - b.s || a.id - b.id)
     : [];
   const selected = editor?.stations.find((station) => station.id === selectedStationId);
-  const unresolved = editor?.stations.filter((station) => !station.confirmed).length ?? 0;
+  const pendingStations = sortedStations.filter((station) => !station.confirmed);
+  const unresolved = pendingStations.length;
   const issues = result?.issues ?? editor?.reference.issues ?? [];
   const importIssues: ProcessingIssue[] = (editor?.file.warnings ?? []).map((warning) => ({
     ...warning,
     severity: 'warning',
   }));
   const totalM = editor?.reference.totalM ?? 0;
+  const geometryControl = PROCESSING_CONTROLS.geometryToleranceM;
+  const geometryToleranceM =
+    editor?.options.geometryToleranceM ?? PROCESSING_DEFAULTS.geometryToleranceM;
+  const fitsSimplificationSlider =
+    Number.isFinite(geometryToleranceM) &&
+    geometryToleranceM >= geometryControl.min &&
+    geometryToleranceM <= geometryControl.max &&
+    Number.isInteger((geometryToleranceM - geometryControl.min) / geometryControl.step);
   const visibleIssues = editor
     ? issuesForStep([...issues, ...importIssues], step, editor.options)
     : [];
@@ -195,6 +207,7 @@ export default function App() {
     setCursorS(0);
     setSelectedStationId(null);
     setActiveView('map');
+    setDevicePanelOpen(false);
     setWorkflow(resetWorkflow());
   }
   async function importFile(file: File) {
@@ -272,6 +285,24 @@ export default function App() {
     const station = editor?.stations.find((item) => item.id === id);
     if (station) setCursorS(station.s);
     go('stations');
+    requestAnimationFrame(() =>
+      document.getElementById(`station-row-${id}`)?.scrollIntoView({ block: 'start' }),
+    );
+  };
+  const focusStation = (id: number) => {
+    selectStation(id);
+    requestAnimationFrame(() =>
+      document.getElementById(`station-row-${id}`)?.focus({ preventScroll: true }),
+    );
+  };
+  const focusNextUnconfirmedStation = () => {
+    const currentIndex = sortedStations.findIndex((station) => station.id === selectedStationId);
+    const next = [
+      ...sortedStations.slice(currentIndex + 1),
+      ...sortedStations.slice(0, currentIndex + 1),
+    ].find((station) => !station.confirmed);
+    if (!next) return;
+    focusStation(next.id);
   };
 
   return (
@@ -423,7 +454,11 @@ export default function App() {
           editor && (
             <section
               className={
-                'editor-layout' + (previewCollapsed ? ' editor-layout--preview-collapsed' : '')
+                'editor-layout' +
+                (step === 'elevation' && editor.reference.elevationUncertain
+                  ? ' editor-layout--elevation-confirmation'
+                  : '') +
+                (previewCollapsed ? ' editor-layout--preview-collapsed' : '')
               }
             >
               <aside className="editor-panel">
@@ -481,19 +516,17 @@ export default function App() {
                             {editor.reverse
                               ? t('app.reversedFromSource')
                               : t('app.asRecordedInSource')}
-                            <small>
-                              {km(totalM)} km ·{' '}
-                              {editor.reference.isClosed ? t('app.closedLoop') : t('app.openRoute')}
-                            </small>
+                            <small>{km(totalM)} km</small>
                           </span>
                           <button
-                            className="icon-button"
+                            className="button button-secondary direction-card__reverse"
                             aria-label={t('app.reverseRoute')}
                             onClick={() =>
                               confirmRebuild(editor.sourceIndex, !editor.reverse, editor.startIndex)
                             }
                           >
                             <RotateCcw size={19} />
+                            {t('app.reverseRoute')}
                           </button>
                         </div>
                         {editor.reference.isClosed && (
@@ -517,27 +550,74 @@ export default function App() {
                             {t('app.setCursorPositionAsStart')}
                           </button>
                         )}
-                        <details className="advanced">
-                          <summary>
+                        <section
+                          className="route-settings"
+                          aria-labelledby="geometry-settings-title"
+                        >
+                          <h3 id="geometry-settings-title">
                             <SlidersHorizontal size={15} />
                             {t('app.geometrySettings')}
-                            <ChevronDown size={14} />
-                          </summary>
-                          <label className="field">
-                            <span>{t('app.simplificationToleranceM')}</span>
-                            <input
-                              type="number"
-                              min={PROCESSING_CONTROLS.geometryToleranceM.min}
-                              max={PROCESSING_CONTROLS.geometryToleranceM.max}
-                              step={PROCESSING_CONTROLS.geometryToleranceM.step}
-                              value={editor.options.geometryToleranceM}
-                              onChange={(e) =>
-                                editOptions({ geometryToleranceM: Number(e.target.value) })
-                              }
-                            />
-                            <small>{t('app.simplificationHelp')}</small>
-                          </label>
-                        </details>
+                          </h3>
+                          <div className="field range-field">
+                            <div className="range-field__heading">
+                              <span id="geometry-tolerance-label">
+                                {t('app.simplificationToleranceM')}
+                              </span>
+                              <output
+                                htmlFor={
+                                  fitsSimplificationSlider ? 'geometry-tolerance' : undefined
+                                }
+                              >
+                                {number(geometryToleranceM)} m
+                              </output>
+                            </div>
+                            {fitsSimplificationSlider ? (
+                              <>
+                                <input
+                                  id="geometry-tolerance"
+                                  type="range"
+                                  aria-labelledby="geometry-tolerance-label"
+                                  aria-valuetext={t('app.toleranceValue', {
+                                    value: geometryToleranceM,
+                                  })}
+                                  min={geometryControl.min}
+                                  max={geometryControl.max}
+                                  step={geometryControl.step}
+                                  value={geometryToleranceM}
+                                  onChange={(event) =>
+                                    editOptions({ geometryToleranceM: Number(event.target.value) })
+                                  }
+                                />
+                                <div className="range-field__limits" aria-hidden="true">
+                                  <span>{number(geometryControl.min)} m</span>
+                                  <span>{number(geometryControl.max)} m</span>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="range-field__saved-value">
+                                <p className="small muted">
+                                  {t('app.savedToleranceNeedsReset', {
+                                    value: number(geometryToleranceM),
+                                    min: number(geometryControl.min),
+                                    max: number(geometryControl.max),
+                                    step: number(geometryControl.step),
+                                    default: number(PROCESSING_DEFAULTS.geometryToleranceM),
+                                  })}
+                                </p>
+                                <button
+                                  className="button button-secondary"
+                                  onClick={() =>
+                                    editOptions({
+                                      geometryToleranceM: PROCESSING_DEFAULTS.geometryToleranceM,
+                                    })
+                                  }
+                                >
+                                  {t('app.useDefaultTolerance')}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </section>
                         <MagneticDeclinationFields
                           value={editor.magneticDeclination}
                           reference={editor.reference.points[0]}
@@ -574,317 +654,321 @@ export default function App() {
                             {t('app.add')}
                           </button>
                         </div>
-                        <p className="small muted">{t('app.stationPlacementHelp')}</p>
                         {unresolved > 0 && (
-                          <div className="inline-note warning">
-                            <TriangleAlert size={15} />
-                            {t('app.unconfirmedCount', { count: unresolved })}
-                          </div>
+                          <section
+                            className="station-pending"
+                            aria-labelledby="station-pending-title"
+                          >
+                            <div className="inline-note warning" id="station-pending-title">
+                              <TriangleAlert size={15} />
+                              <span>{t('app.unconfirmedCount', { count: unresolved })}</span>
+                            </div>
+                            <ul
+                              className="station-pending-list"
+                              aria-label={t('app.unconfirmedStations')}
+                            >
+                              {pendingStations.map((station) => (
+                                <li key={station.id}>
+                                  <button
+                                    className="station-pending-link"
+                                    onClick={() => focusStation(station.id)}
+                                  >
+                                    <span>{station.name}</span>
+                                    <small>{km(station.s)} km</small>
+                                    <ArrowRight size={14} aria-hidden="true" />
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                            <button className="text-button" onClick={focusNextUnconfirmedStation}>
+                              {t('app.nextUnconfirmedStation')}
+                              <ArrowRight size={14} />
+                            </button>
+                          </section>
                         )}
                         <div className="station-list">
                           {sortedStations.map((station, i) => (
-                            <button
-                              key={station.id}
+                            <div
                               className={
-                                'station-row ' +
-                                (selectedStationId === station.id ? 'selected' : '')
+                                'station-item' +
+                                (selectedStationId === station.id ? ' station-item--expanded' : '')
                               }
-                              onClick={() => {
-                                setSelectedStationId(station.id);
-                                setCursorS(station.s);
-                              }}
+                              key={station.id}
                             >
-                              <span
-                                className={'station-pin ' + (station.kind < 2 ? 'endpoint' : '')}
+                              <button
+                                id={`station-row-${station.id}`}
+                                aria-expanded={selectedStationId === station.id}
+                                aria-controls={
+                                  selectedStationId === station.id
+                                    ? `station-editor-${station.id}`
+                                    : undefined
+                                }
+                                className={
+                                  'station-row ' +
+                                  (selectedStationId === station.id ? 'selected' : '')
+                                }
+                                onClick={() => {
+                                  setSelectedStationId(
+                                    selectedStationId === station.id ? null : station.id,
+                                  );
+                                  setCursorS(station.s);
+                                }}
                               >
-                                {station.kind < 2 ? <Flag size={12} /> : i}
-                              </span>
-                              <span className="station-label">
-                                <strong>{station.name}</strong>
-                                <small>
-                                  {km(station.s)} km{' '}
-                                  {station.stageBoundary ? '· ' + t('app.stageBoundary') : ''}
-                                </small>
-                              </span>
-                              {!station.confirmed ? (
-                                <TriangleAlert size={15} className="warning-text" />
-                              ) : (
-                                <Check size={14} className="muted" />
+                                <span
+                                  className={'station-pin ' + (station.kind < 2 ? 'endpoint' : '')}
+                                >
+                                  {station.kind < 2 ? <Flag size={12} /> : i}
+                                </span>
+                                <span className="station-label">
+                                  <strong id={`station-name-${station.id}`}>{station.name}</strong>
+                                  <small>
+                                    {km(station.s)} km{' '}
+                                    {station.stageBoundary ? '· ' + t('app.stageBoundary') : ''}
+                                  </small>
+                                  {!station.confirmed && (
+                                    <small className="station-status">
+                                      {t('app.stationPositionUnconfirmed')}
+                                    </small>
+                                  )}
+                                </span>
+                                <span className="station-row-actions">
+                                  {!station.confirmed ? (
+                                    <TriangleAlert
+                                      size={15}
+                                      className="warning-text"
+                                      aria-hidden="true"
+                                    />
+                                  ) : (
+                                    <Check size={14} className="muted" aria-hidden="true" />
+                                  )}
+                                  <span className="station-disclosure">
+                                    {t(
+                                      selectedStationId === station.id
+                                        ? 'app.collapseStationEditor'
+                                        : 'app.expandStationEditor',
+                                    )}
+                                    <ChevronDown size={14} aria-hidden="true" />
+                                  </span>
+                                </span>
+                              </button>
+                              {selected && selected.id === station.id && (
+                                <div className="station-editor-reveal">
+                                  <div className="station-editor-clip">
+                                    <div
+                                      className="station-editor"
+                                      id={`station-editor-${station.id}`}
+                                      role="region"
+                                      aria-labelledby={`station-name-${station.id} station-editor-title-${station.id}`}
+                                    >
+                                      <div className="section-toolbar">
+                                        <strong id={`station-editor-title-${station.id}`}>
+                                          {t('app.editStation')}
+                                        </strong>
+                                        {selected.kind > 1 && (
+                                          <button
+                                            className="icon-button danger"
+                                            aria-label={t('app.deleteStation')}
+                                            onClick={() => {
+                                              edit((e) => ({
+                                                ...e,
+                                                stations: e.stations.filter(
+                                                  (s) => s.id !== selected.id,
+                                                ),
+                                              }));
+                                              setSelectedStationId(null);
+                                            }}
+                                          >
+                                            <Trash2 size={15} />
+                                          </button>
+                                        )}
+                                      </div>
+                                      <label className="field">
+                                        <span>{t('app.name')}</span>
+                                        <input
+                                          value={selected.name}
+                                          onChange={(e) => editStation({ name: e.target.value })}
+                                        />
+                                      </label>
+                                      <div className="field-pair">
+                                        <label className="field">
+                                          <span>{t('app.shortLabel')}</span>
+                                          <input
+                                            value={selected.shortLabel}
+                                            onChange={(e) =>
+                                              editStation({ shortLabel: e.target.value })
+                                            }
+                                          />
+                                        </label>
+                                        <label className="field">
+                                          <span>{t('app.type')}</span>
+                                          <select
+                                            value={selected.kind}
+                                            disabled={selected.kind < 2}
+                                            onChange={(e) =>
+                                              editStation({
+                                                kind: Number(
+                                                  e.target.value,
+                                                ) as DraftStation['kind'],
+                                              })
+                                            }
+                                          >
+                                            {selected.kind < 2 ? (
+                                              <option value={selected.kind}>
+                                                {selected.kind === 0
+                                                  ? t('app.start')
+                                                  : t('app.finish')}
+                                              </option>
+                                            ) : (
+                                              <>
+                                                <option value={2}>{t('app.checkpoint')}</option>
+                                                <option value={3}>{t('app.water')}</option>
+                                                <option value={4}>
+                                                  {t('app.pointOfInterest')}
+                                                </option>
+                                              </>
+                                            )}
+                                          </select>
+                                        </label>
+                                      </div>
+                                      <label className="field">
+                                        <span>{t('app.alongRouteDistanceM')}</span>
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max={totalM}
+                                          step="0.1"
+                                          disabled={selected.kind < 2}
+                                          value={Number(selected.s.toFixed(1))}
+                                          onChange={(e) =>
+                                            editStation({
+                                              s: Math.min(
+                                                totalM,
+                                                Math.max(0, Number(e.target.value)),
+                                              ),
+                                              confirmed: false,
+                                            })
+                                          }
+                                        />
+                                      </label>
+                                      {selected.kind > 1 && (
+                                        <button
+                                          className="text-button"
+                                          disabled={cursorS === null}
+                                          onClick={() =>
+                                            editStation({
+                                              s: Math.min(
+                                                totalM,
+                                                Math.max(0, cursorS ?? selected.s),
+                                              ),
+                                              confirmed: true,
+                                            })
+                                          }
+                                        >
+                                          {t('app.useCursorPosition')}{' '}
+                                          {cursorS === null ? '' : km(cursorS) + ' km'}
+                                          <ArrowRight size={14} />
+                                        </button>
+                                      )}
+                                      {selected.candidates.length > 1 && (
+                                        <div className="candidate-list">
+                                          <p className="section-label">{t('app.possibleVisits')}</p>
+                                          {selected.candidates.map((candidate, i) => (
+                                            <button
+                                              key={i}
+                                              className={
+                                                'candidate ' +
+                                                (Math.abs(candidate.s - selected.s) < 1
+                                                  ? 'chosen'
+                                                  : '')
+                                              }
+                                              onClick={() => {
+                                                editStation({ s: candidate.s, confirmed: true });
+                                                setCursorS(candidate.s);
+                                              }}
+                                            >
+                                              <span>{km(candidate.s)} km</span>
+                                              <small>
+                                                {t('app.landmarkOffset', {
+                                                  distance: number(Math.round(candidate.distanceM)),
+                                                })}
+                                              </small>
+                                            </button>
+                                          ))}
+                                        </div>
+                                      )}
+                                      <label className="check-field">
+                                        <input
+                                          type="checkbox"
+                                          disabled={selected.kind < 2}
+                                          checked={selected.stageBoundary}
+                                          onChange={(e) =>
+                                            editStation({ stageBoundary: e.target.checked })
+                                          }
+                                        />
+                                        <span>{t('app.splitStagesAtThisStation')}</span>
+                                      </label>
+                                      {selected.kind > 1 && !selected.confirmed && (
+                                        <button
+                                          className="button button-primary full-width"
+                                          onClick={() => editStation({ confirmed: true })}
+                                        >
+                                          <Check size={16} />
+                                          {t('app.confirmThisVisit')}
+                                        </button>
+                                      )}
+                                      <details className="advanced">
+                                        <summary>
+                                          {t('app.landmarkCoordinates')}
+                                          <ChevronDown size={14} />
+                                        </summary>
+                                        <p className="small muted">
+                                          {t('app.landmarkPositionHelp')}
+                                        </p>
+                                        <div className="field-pair">
+                                          <label className="field">
+                                            <span>{t('app.latitude')}</span>
+                                            <input
+                                              type="number"
+                                              step="0.0000001"
+                                              value={selected.lat}
+                                              onChange={(e) =>
+                                                editStation({ lat: Number(e.target.value) })
+                                              }
+                                            />
+                                          </label>
+                                          <label className="field">
+                                            <span>{t('app.longitude')}</span>
+                                            <input
+                                              type="number"
+                                              step="0.0000001"
+                                              value={selected.lon}
+                                              onChange={(e) =>
+                                                editStation({ lon: Number(e.target.value) })
+                                              }
+                                            />
+                                          </label>
+                                        </div>
+                                      </details>
+                                    </div>
+                                  </div>
+                                </div>
                               )}
-                            </button>
+                            </div>
                           ))}
                         </div>
-                        {selected && (
-                          <div className="station-editor">
-                            <div className="section-toolbar">
-                              <strong>{t('app.editStation')}</strong>
-                              {selected.kind > 1 && (
-                                <button
-                                  className="icon-button danger"
-                                  aria-label={t('app.deleteStation')}
-                                  onClick={() => {
-                                    edit((e) => ({
-                                      ...e,
-                                      stations: e.stations.filter((s) => s.id !== selected.id),
-                                    }));
-                                    setSelectedStationId(null);
-                                  }}
-                                >
-                                  <Trash2 size={15} />
-                                </button>
-                              )}
-                            </div>
-                            <label className="field">
-                              <span>{t('app.name')}</span>
-                              <input
-                                value={selected.name}
-                                onChange={(e) => editStation({ name: e.target.value })}
-                              />
-                            </label>
-                            <div className="field-pair">
-                              <label className="field">
-                                <span>{t('app.shortLabel')}</span>
-                                <input
-                                  value={selected.shortLabel}
-                                  onChange={(e) => editStation({ shortLabel: e.target.value })}
-                                />
-                              </label>
-                              <label className="field">
-                                <span>{t('app.type')}</span>
-                                <select
-                                  value={selected.kind}
-                                  disabled={selected.kind < 2}
-                                  onChange={(e) =>
-                                    editStation({
-                                      kind: Number(e.target.value) as DraftStation['kind'],
-                                    })
-                                  }
-                                >
-                                  {selected.kind < 2 ? (
-                                    <option value={selected.kind}>
-                                      {selected.kind === 0 ? t('app.start') : t('app.finish')}
-                                    </option>
-                                  ) : (
-                                    <>
-                                      <option value={2}>{t('app.checkpoint')}</option>
-                                      <option value={3}>{t('app.water')}</option>
-                                      <option value={4}>{t('app.pointOfInterest')}</option>
-                                    </>
-                                  )}
-                                </select>
-                              </label>
-                            </div>
-                            <label className="field">
-                              <span>{t('app.alongRouteDistanceM')}</span>
-                              <input
-                                type="number"
-                                min="0"
-                                max={totalM}
-                                step="0.1"
-                                disabled={selected.kind < 2}
-                                value={Number(selected.s.toFixed(1))}
-                                onChange={(e) =>
-                                  editStation({
-                                    s: Math.min(totalM, Math.max(0, Number(e.target.value))),
-                                    confirmed: false,
-                                  })
-                                }
-                              />
-                            </label>
-                            {selected.kind > 1 && (
-                              <button
-                                className="text-button"
-                                disabled={cursorS === null}
-                                onClick={() =>
-                                  editStation({
-                                    s: Math.min(totalM, Math.max(0, cursorS ?? selected.s)),
-                                    confirmed: true,
-                                  })
-                                }
-                              >
-                                {t('app.useCursorPosition')}{' '}
-                                {cursorS === null ? '' : km(cursorS) + ' km'}
-                                <ArrowRight size={14} />
-                              </button>
-                            )}
-                            {selected.candidates.length > 1 && (
-                              <div className="candidate-list">
-                                <p className="section-label">{t('app.possibleVisits')}</p>
-                                {selected.candidates.map((candidate, i) => (
-                                  <button
-                                    key={i}
-                                    className={
-                                      'candidate ' +
-                                      (Math.abs(candidate.s - selected.s) < 1 ? 'chosen' : '')
-                                    }
-                                    onClick={() => {
-                                      editStation({ s: candidate.s, confirmed: true });
-                                      setCursorS(candidate.s);
-                                    }}
-                                  >
-                                    <span>{km(candidate.s)} km</span>
-                                    <small>
-                                      {t('app.landmarkOffset', {
-                                        distance: number(Math.round(candidate.distanceM)),
-                                      })}
-                                    </small>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            <label className="check-field">
-                              <input
-                                type="checkbox"
-                                disabled={selected.kind < 2}
-                                checked={selected.stageBoundary}
-                                onChange={(e) => editStation({ stageBoundary: e.target.checked })}
-                              />
-                              <span>{t('app.splitStagesAtThisStation')}</span>
-                            </label>
-                            {selected.kind > 1 && !selected.confirmed && (
-                              <button
-                                className="button button-primary full-width"
-                                onClick={() => editStation({ confirmed: true })}
-                              >
-                                <Check size={16} />
-                                {t('app.confirmThisVisit')}
-                              </button>
-                            )}
-                            <details className="advanced">
-                              <summary>
-                                {t('app.landmarkCoordinates')}
-                                <ChevronDown size={14} />
-                              </summary>
-                              <p className="small muted">{t('app.landmarkPositionHelp')}</p>
-                              <div className="field-pair">
-                                <label className="field">
-                                  <span>{t('app.latitude')}</span>
-                                  <input
-                                    type="number"
-                                    step="0.0000001"
-                                    value={selected.lat}
-                                    onChange={(e) => editStation({ lat: Number(e.target.value) })}
-                                  />
-                                </label>
-                                <label className="field">
-                                  <span>{t('app.longitude')}</span>
-                                  <input
-                                    type="number"
-                                    step="0.0000001"
-                                    value={selected.lon}
-                                    onChange={(e) => editStation({ lon: Number(e.target.value) })}
-                                  />
-                                </label>
-                              </div>
-                            </details>
-                          </div>
-                        )}
                       </>
                     )}
                     {step === 'elevation' && (
-                      <>
-                        {editor.reference.points.some((p) => p.elevation === null) && (
-                          <div className="inline-note">
-                            <Mountain size={18} />
-                            <span>
-                              {t('app.missingElevationCount', {
-                                count: editor.reference.points.filter((p) => p.elevation === null)
-                                  .length,
-                              })}
-                            </span>
-                          </div>
-                        )}
-                        <fieldset className="radio-cards">
-                          <legend>{t('app.elevationSettings')}</legend>
-                          {(['source', 'interpolate'] as const).map((mode, i) => (
-                            <label
-                              className={
-                                'radio-card ' +
-                                (editor.options.elevationMode === mode ? 'selected' : '')
-                              }
-                              key={mode}
-                            >
-                              <input
-                                type="radio"
-                                name="elevation"
-                                value={mode}
-                                checked={editor.options.elevationMode === mode}
-                                onChange={() => editOptions({ elevationMode: mode })}
-                              />
-                              <span>
-                                <strong>
-                                  {[t('app.useSourceElevation'), t('app.fillElevationGaps')][i]}
-                                </strong>
-                                <small>
-                                  {
-                                    [
-                                      t('app.sourceElevationHelp'),
-                                      t('app.interpolateElevationGapsDescription'),
-                                    ][i]
-                                  }
-                                </small>
-                              </span>
-                            </label>
-                          ))}
-                        </fieldset>
-                        {editor.reference.elevationUncertain && (
-                          <label className="check-field caution">
-                            <input
-                              type="checkbox"
-                              checked={editor.options.acceptUncertainElevation}
-                              onChange={(e) =>
-                                editOptions({ acceptUncertainElevation: e.target.checked })
-                              }
-                            />
-                            <span>{t('app.confirmUncertainElevation')}</span>
-                          </label>
-                        )}
-                        <label className="field">
-                          <span>{t('app.samplingIntervalM')}</span>
-                          <select
-                            value={editor.options.elevationIntervalM}
-                            onChange={(e) =>
-                              editOptions({ elevationIntervalM: Number(e.target.value) })
-                            }
-                          >
-                            {PROCESSING_CHOICES.elevationIntervalM.map((n) => (
-                              <option key={n} value={n}>
-                                {n} m
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="field">
-                          <span>{t('app.smoothingWindowM')}</span>
-                          <select
-                            value={editor.options.smoothingWindowM}
-                            onChange={(e) =>
-                              editOptions({ smoothingWindowM: Number(e.target.value) })
-                            }
-                          >
-                            {PROCESSING_CHOICES.smoothingWindowM.map((n) => (
-                              <option key={n} value={n}>
-                                {n === 0 ? t('app.smoothingOff') : `${n} m`}
-                              </option>
-                            ))}
-                          </select>
-                          <small>{t('app.smoothingHelp')}</small>
-                        </label>
-                        {route && (
-                          <label className="check-field">
-                            <input
-                              type="checkbox"
-                              checked={compareSource}
-                              onChange={(e) => setCompareSource(e.target.checked)}
-                            />
-                            <span>{t('app.compareOriginalElevation')}</span>
-                          </label>
-                        )}
-                        <div className="info-card">
-                          <ShieldCheck size={18} />
-                          <p>{t('app.completeElevationRequired')}</p>
-                        </div>
-                      </>
+                      <ElevationSettings
+                        reference={editor.reference}
+                        options={editor.options}
+                        issues={issues}
+                        currentResult={currentResult}
+                        route={route}
+                        compareSource={compareSource}
+                        onOptionsChange={editOptions}
+                        onCompareSourceChange={setCompareSource}
+                      />
                     )}
                     {step === 'preview' && (
                       <>
@@ -943,6 +1027,69 @@ export default function App() {
                             <ArrowRight size={15} />
                           </button>
                         )}
+                        <div
+                          className="export-actions"
+                          role="group"
+                          aria-label={t('app.exportMethod')}
+                        >
+                          <button
+                            className="button button-primary full-width export-button"
+                            disabled={!ready}
+                            onClick={() => void exportRoute()}
+                          >
+                            <ArrowDownToLine size={18} />
+                            {t('app.downloadRte')}
+                          </button>
+                          <button
+                            className="button button-secondary full-width export-button"
+                            aria-expanded={devicePanelOpen}
+                            aria-controls="export-device-panel"
+                            onClick={() => setDevicePanelOpen((open) => !open)}
+                          >
+                            <Bluetooth size={18} />
+                            {t('app.sendToDevice')}
+                          </button>
+                        </div>
+                        {exported && (
+                          <div className="success-card">
+                            <CheckCircle2 size={20} />
+                            <span>
+                              <strong>{exported.filename}</strong>
+                              <small>
+                                {t('app.exportDetails', {
+                                  size: size(exported.bytes),
+                                  revision: number(exported.revision),
+                                })}
+                              </small>
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <IssuesList
+                      issues={visibleIssues}
+                      onLocate={(s) => {
+                        setCursorS(s);
+                        showView('map');
+                      }}
+                    />
+                  </fieldset>
+                  {step === 'export' && (
+                    <>
+                      <div id="export-device-panel" hidden={!devicePanelOpen}>
+                        <BluetoothUpload
+                          ready={!!ready}
+                          disabled={!!files.busy}
+                          filename={routeFilename(editor.name)}
+                          prepareExport={(signal) => files.prepareExport(route, !!ready, signal)}
+                          onBusyChange={setDeviceBusy}
+                        />
+                      </div>
+                      <section
+                        className="export-file-details"
+                        aria-labelledby="export-file-details-title"
+                      >
+                        <h3 id="export-file-details-title">{t('app.fileDetails')}</h3>
                         <dl className="export-details">
                           <div>
                             <dt>{t('app.format')}</dt>
@@ -966,50 +1113,15 @@ export default function App() {
                           </div>
                         </dl>
                         <button
-                          className="button button-primary full-width export-button"
-                          disabled={!ready}
-                          onClick={() => void exportRoute()}
+                          className="text-button full-width"
+                          disabled={busy}
+                          onClick={exportReport}
                         >
-                          <ArrowDownToLine size={18} />
-                          {t('app.downloadRte')}
-                        </button>
-                        {exported && (
-                          <div className="success-card">
-                            <CheckCircle2 size={20} />
-                            <span>
-                              <strong>{exported.filename}</strong>
-                              <small>
-                                {t('app.exportDetails', {
-                                  size: size(exported.bytes),
-                                  revision: number(exported.revision),
-                                })}
-                              </small>
-                            </span>
-                          </div>
-                        )}
-                        <button className="text-button full-width" onClick={exportReport}>
                           {t('app.downloadProcessingReport')}
                           <ArrowDownToLine size={14} />
                         </button>
-                        <p className="small muted">{t('app.revisionHelp')}</p>
-                      </>
-                    )}
-                    <IssuesList
-                      issues={visibleIssues}
-                      onLocate={(s) => {
-                        setCursorS(s);
-                        showView('map');
-                      }}
-                    />
-                  </fieldset>
-                  {step === 'export' && (
-                    <BluetoothUpload
-                      ready={!!ready}
-                      disabled={!!files.busy}
-                      filename={routeFilename(editor.name)}
-                      prepareExport={(signal) => files.prepareExport(route, !!ready, signal)}
-                      onBusyChange={setDeviceBusy}
-                    />
+                      </section>
+                    </>
                   )}
                 </div>
                 <div className="panel-footer">
@@ -1025,6 +1137,19 @@ export default function App() {
                         }}
                       />
                       <span>{t('app.confirmRouteDirection')}</span>
+                    </label>
+                  )}
+                  {step === 'elevation' && editor.reference.elevationUncertain && (
+                    <label className="check-field caution">
+                      <input
+                        type="checkbox"
+                        checked={editor.options.acceptUncertainElevation}
+                        disabled={busy}
+                        onChange={(event) =>
+                          editOptions({ acceptUncertainElevation: event.target.checked })
+                        }
+                      />
+                      <span>{t('app.confirmUncertainElevation')}</span>
                     </label>
                   )}
                   {continueHint && (

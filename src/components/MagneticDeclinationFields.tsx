@@ -70,12 +70,11 @@ export default function MagneticDeclinationFields({
   onRetry: () => void;
   onChange: (value: MagneticDeclinationInfo | undefined) => void;
 }) {
-  const { t } = useLocale();
+  const { t, number } = useLocale();
   const update = (patch: Partial<MagneticDeclinationInfo>) => onChange({ ...value!, ...patch });
   return (
-    <details className="advanced">
-      <summary>{t('app.magneticDeclination')}</summary>
-      <p className="small muted">{t('app.declinationHelp')}</p>
+    <section className="route-settings" aria-labelledby="declination-settings-title">
+      <h3 id="declination-settings-title">{t('app.magneticDeclination')}</h3>
       <label className="field">
         <span>{t('app.declinationMode')}</span>
         <select
@@ -107,12 +106,7 @@ export default function MagneticDeclinationFields({
                   ? 'app.declinationUnavailable'
                   : 'app.declinationLoading',
             )}
-            {status === 'available' && value && (
-              <>
-                {' '}
-                {value.declinationCdeg / 100}° · {value.source} · {value.referenceDate}
-              </>
-            )}
+            {status === 'available' && value && <> {number(value.declinationCdeg / 100)}°</>}
           </p>
           <button
             className="button button-secondary"
@@ -213,6 +207,6 @@ export default function MagneticDeclinationFields({
           )}
         </>
       )}
-    </details>
+    </section>
   );
 }

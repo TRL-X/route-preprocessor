@@ -30,7 +30,7 @@ describe('stage-specific user diagnostics', () => {
       'LARGE_SOURCE_EDGE',
       'ROUTE_NAME_INVALID',
     ]);
-    expect(codes(issuesForStep(issues, 'stations', options))).toEqual(['STATION_UNCONFIRMED']);
+    expect(issuesForStep(issues, 'stations', options)).toEqual([]);
     expect(codes(issuesForStep(issues, 'elevation', options))).toEqual(['INCOMPLETE_ELEVATION']);
     expect(issues).toHaveLength(9);
   });
@@ -43,6 +43,29 @@ describe('stage-specific user diagnostics', () => {
       ]);
     }
   });
+  it('uses the pending-stations list for confirmations while keeping other station errors visible', () => {
+    const unconfirmed = {
+      ...error('STATION_UNCONFIRMED'),
+      params: { name: 'Crossing CP' },
+      s: 120,
+    };
+    const issues = [
+      unconfirmed,
+      error('STATION_NAME_INVALID'),
+      error('BOUNDARY_COLLISION'),
+      error('processing'),
+    ];
+    const original = structuredClone(issues);
+    expect(codes(issuesForStep(issues, 'stations', options))).toEqual([
+      'STATION_NAME_INVALID',
+      'BOUNDARY_COLLISION',
+      'processing',
+    ]);
+    for (const step of ['preview', 'export'] as const) {
+      expect(issuesForStep(issues, step, options)).toEqual(original);
+    }
+    expect(issues).toEqual(original);
+  });
   it('shows required elevation warnings and avoids duplicate KML confirmation messages', () => {
     const imported = [
       warning('IMPORT_SHORT_SEGMENT'),
@@ -53,10 +76,28 @@ describe('stage-specific user diagnostics', () => {
     expect(codes(issuesForStep(imported, 'elevation', options))).toEqual(['IMPORT_KML_ELEVATION']);
     expect(
       codes(issuesForStep([...imported, error('ELEVATION_UNCONFIRMED')], 'elevation', options)),
-    ).toEqual(['ELEVATION_UNCONFIRMED']);
+    ).toEqual([]);
     expect(
       issuesForStep(imported, 'elevation', { ...options, acceptUncertainElevation: true }),
     ).toEqual([]);
+  });
+  it('keeps other elevation errors and report diagnostics while confirmation is shown in the footer', () => {
+    const issues = [
+      error('ELEVATION_UNCONFIRMED'),
+      error('INCOMPLETE_ELEVATION'),
+      error('PROFILE_RESOURCE_LIMIT'),
+      error('processing'),
+    ];
+    const original = structuredClone(issues);
+    expect(codes(issuesForStep(issues, 'elevation', options))).toEqual([
+      'INCOMPLETE_ELEVATION',
+      'PROFILE_RESOURCE_LIMIT',
+      'processing',
+    ]);
+    for (const step of ['preview', 'export'] as const) {
+      expect(issuesForStep(issues, step, options)).toEqual(original);
+    }
+    expect(issues).toEqual(original);
   });
   it('shows long elevation gap warnings without adding export blockers', () => {
     const issues = [warning('ELEVATION_LARGE_GAP')];

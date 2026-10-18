@@ -105,7 +105,10 @@ editing the distance or clearing a boundary rather than silently moving it.
 ## Geometry and quantization
 
 The default geometry tolerance is **2 m**. Core accepts 0–1,000 m; the interface
-limits editing to 0–50 m. Constrained Douglas–Peucker simplification preserves
+provides a **1–5 m** slider in **0.5 m** steps. Restored drafts retain their saved
+tolerance, including values outside the slider's range or step. Such values are
+shown explicitly and remain unchanged until the user resets to the 2 m default;
+core validation still determines whether they can be processed. Constrained Douglas–Peucker simplification preserves
 endpoints and stage boundaries while limiting lateral deviation and progress
 interpolation error. The latter threshold is `max(2 m, geometryToleranceM)`.
 
@@ -128,13 +131,17 @@ strictly from 0 to `S`. Quantization can introduce resolution-scale differences.
 ## Elevation
 
 Geometry and elevation are sampled independently and linked by distance, not
-array index. Defaults are a **10 m** elevation grid, **0 m** smoothing window and
-`source` mode. Every export requires complete ELEV and elevation metadata.
+array index. Core defaults remain a **10 m** elevation grid, **0 m** smoothing
+window and `source` mode. New imports select `interpolate` when the normalized
+reference contains any missing height; complete routes select `source`, including
+routes with zero or negative heights. Restored drafts and reference rebuilds keep
+their existing elevation mode. Every export requires complete ELEV and elevation
+metadata.
 
-| `elevationMode` | Behavior                                                                             |
-| --------------- | ------------------------------------------------------------------------------------ |
-| `source`        | Every source height must be known                                                    |
-| `interpolate`   | Explicitly fill internal gaps by distance-linear interpolation between known heights |
+| `elevationMode` | Behavior                                                                  |
+| --------------- | ------------------------------------------------------------------------- |
+| `source`        | Every source height must be known                                         |
+| `interpolate`   | Fill internal gaps by distance-linear interpolation between known heights |
 
 Missing endpoint or whole-route elevation produces `INCOMPLETE_ELEVATION` in
 either mode. Unknown terrain is never extended flat from a nearby height. Gap
@@ -214,7 +221,7 @@ segments, duplicate coordinates, height conflicts, antimeridian crossings,
 repeated visits, reversal, closed-route start changes, quantization collisions,
 UTF-8 limits and elevation totals. Complete profiles are checked by encoding,
 strict decoding and deterministic re-encoding. Incomplete profiles must fail
-unless explicit interpolation can fill their internal gaps. These checks do not
+unless the selected interpolation mode can fill their internal gaps. These checks do not
 certify the source elevation's accuracy.
 
 The editor does not fetch DEM heights, transform source coordinate systems, join

@@ -149,6 +149,8 @@ test('cannot bypass route confirmation or change steps during a pending export',
   for (const button of await navigation.getByRole('button').all())
     await expect(button).toBeDisabled();
   await expect(page.locator('.panel-fields')).toHaveAttribute('disabled', '');
+  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Send to device', exact: true })).toBeDisabled();
   await expect(
     page.getByRole('button', { name: 'Download processing report', exact: true }),
   ).toBeDisabled();
@@ -227,6 +229,151 @@ test('keeps the next action visible and follows each editing step with the relev
   }
 });
 
+test('edits the simplification slider with the keyboard, invalidates confirmation, and preserves drafts and undo', async ({
+  page,
+}) => {
+  await importText(page, gpx(complete));
+  await expect(
+    page.getByRole('heading', { name: 'Route simplification', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
+  const reverse = page.getByRole('button', { name: 'Reverse route', exact: true });
+  await expect(reverse).toBeVisible();
+  await expect(reverse).toHaveText('Reverse route');
+  await expect(page.locator('.direction-card small')).toHaveText(/^\d+\.\d{2} km$/);
+  await expect(page.locator('.direction-card')).not.toContainText('open route');
+  await expect(page.locator('.direction-card')).not.toContainText('closed loop');
+  await expect(
+    page.getByText('Larger values retain fewer route points. Distances stay unchanged.', {
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText(
+      'Automatically query BGS WMM2025 using the route midpoint and selected UTC date. Only that coordinate and date are sent. Assumed WGS84 ellipsoid height: 0 m. If unavailable, the metadata is omitted. You can also enter a manual reference.',
+      { exact: true },
+    ),
+  ).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Declination source', exact: true })).toHaveValue(
+    'auto',
+  );
+  const tolerance = page.getByRole('slider', {
+    name: 'Simplification tolerance (m)',
+    exact: true,
+  });
+  await expect(tolerance).toHaveAttribute('min', '1');
+  await expect(tolerance).toHaveAttribute('max', '5');
+  await expect(tolerance).toHaveAttribute('step', '0.5');
+  await expect(tolerance).toHaveValue('2');
+  const confirmation = page.getByRole('checkbox', {
+    name: 'I have checked the route and direction on the map.',
+  });
+  await confirmation.check();
+  await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeEnabled();
+  await tolerance.press('ArrowRight');
+  await expect(tolerance).toHaveValue('2.5');
+  await expect(confirmation).not.toBeChecked();
+  await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(tolerance).toHaveValue('2');
+  await expect(confirmation).not.toBeChecked();
+  await tolerance.press('End');
+  await expect(tolerance).toHaveValue('5');
+  await tolerance.press('Home');
+  await expect(tolerance).toHaveValue('1');
+  await tolerance.press('ArrowRight');
+  await expect(tolerance).toHaveValue('1.5');
+  await expect(
+    page.getByRole('status', { name: 'Saved on this device', exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: /Continue editing/ }).click();
+  await expect(tolerance).toHaveValue('1.5');
+  await confirmation.check();
+  await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeEnabled();
+  await tolerance.press('ArrowRight');
+  await expect(tolerance).toHaveValue('2');
+  await expect(confirmation).not.toBeChecked();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(tolerance).toHaveValue('1.5');
+  const output = await downloadRoute(page);
+  expect(output.route.name).toBe('Forest trail');
+});
+
+test('preserves a saved tolerance outside the slider range until an explicit reset', async ({
+  page,
+}) => {
+  await importText(page, gpx(complete));
+  await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(
+    page.getByRole('status', { name: 'Saved on this device', exact: true }),
+  ).toBeVisible();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open('trl-x-route-studio');
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const tx = db.transaction('drafts', 'readwrite');
+          const store = tx.objectStore('drafts');
+          const current = store.get('current');
+          current.onsuccess = () => {
+            const draft = current.result;
+            draft.editor.options.geometryToleranceM = 20;
+            store.put(draft, 'current');
+          };
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onerror = () => {
+            db.close();
+            reject(tx.error);
+          };
+        };
+      }),
+  );
+  await page.reload();
+  await page.getByRole('button', { name: /Continue editing/ }).click();
+  const tolerance = page.getByRole('slider', {
+    name: 'Simplification tolerance (m)',
+    exact: true,
+  });
+  await expect(tolerance).toHaveCount(0);
+  await expect(
+    page.getByText(
+      'The saved tolerance is 20 m. The slider supports 1–5 m in 0.5 m steps. Restore the 2 m default to adjust it.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  const reset = page.getByRole('button', { name: 'Use default tolerance', exact: true });
+  await expect(reset).toBeVisible();
+  await confirmRoute(page);
+  await step(page, 'Review');
+  const reportDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download processing report', exact: true }).click();
+  const report = JSON.parse(await readFile((await (await reportDownload).path())!, 'utf8'));
+  expect(report.parameters.geometryToleranceM).toBe(20);
+  await step(page, 'Route');
+  await expect(tolerance).toHaveCount(0);
+  await reset.click();
+  await expect(tolerance).toBeEnabled();
+  await expect(tolerance).toHaveValue('2');
+  const confirmation = page.getByRole('checkbox', {
+    name: 'I have checked the route and direction on the map.',
+  });
+  await expect(confirmation).not.toBeChecked();
+  await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeDisabled();
+  await confirmation.check();
+  await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeEnabled();
+  await tolerance.press('ArrowRight');
+  await expect(tolerance).toHaveValue('2.5');
+  await expect(confirmation).not.toBeChecked();
+});
+
 test('edits stations, undoes deletion, exports valid bytes, and restores a draft with stable revisions', async ({
   page,
 }) => {
@@ -298,7 +445,7 @@ test('requires a deliberate visit choice at repeated crossings', async ({ page }
   );
   await expect(page.locator('#step-progress-help')).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
-  await expect(page.locator('.issue[data-code="STATION_UNCONFIRMED"]')).toBeVisible();
+  await expect(page.locator('.issue[data-code="STATION_UNCONFIRMED"]')).toHaveCount(0);
   await step(page, 'Stations');
   await page.locator('.station-row', { hasText: 'Crossing CP' }).click();
   await expect(page.locator('.candidate')).toHaveCount(2);
@@ -313,7 +460,254 @@ test('requires a deliberate visit choice at repeated crossings', async ({ page }
   );
 });
 
-test('interpolates only an explicitly selected short interior elevation gap', async ({ page }) => {
+test('edits stations beside the selected row and cycles through remaining confirmations', async ({
+  page,
+  isMobile,
+}) => {
+  const crossing: Point[] = [
+    [0, 0, 100],
+    [0, 0.001, 110],
+    [0.001, 0.001, 120],
+    [0, 0.001, 110],
+    [0, 0.002, 100],
+  ];
+  const landmarks = Array.from({ length: 12 }, (_, index) => {
+    const name = `Crossing ${String(index + 1).padStart(2, '0')}`;
+    return `<wpt lat="0" lon="0.001"><name>${name}</name></wpt>`;
+  }).join('');
+  await importText(page, gpx(crossing, landmarks));
+  await confirmRoute(page);
+  await expect(
+    page.getByText(
+      'To add: choose a position on the map or profile, then select Add station. To move: select a station, choose a new position, then select Move to cursor.',
+      { exact: true },
+    ),
+  ).toHaveCount(0);
+  const rows = page.locator('.station-row');
+  await expect(rows).toHaveCount(14);
+  await expect(rows.filter({ hasText: 'Position needs confirmation' })).toHaveCount(12);
+  const pending = page.getByRole('list', { name: 'Unconfirmed stations', exact: true });
+  const last = rows.filter({ hasText: 'Crossing 12' });
+  const pendingLast = pending.getByRole('button', { name: /Crossing 12/ });
+  await expect(pendingLast).toContainText(/\d+\.\d{2} km/);
+  await pendingLast.click();
+  await expect(last).toBeFocused();
+  await expect(last).toBeInViewport({ ratio: 1 });
+  await expect(last).toHaveAttribute('aria-expanded', 'true');
+  await expect(last).toContainText('Collapse editor');
+  const name = page.getByLabel('Name', { exact: true });
+  const next = page.getByRole('button', { name: 'Next unconfirmed station', exact: true });
+  await expect(name).toHaveValue('Crossing 12');
+  const selectedDistance = Number(
+    await page.getByLabel('Along-route distance (m)', { exact: true }).inputValue(),
+  );
+  await expect
+    .poll(async () =>
+      Number(await page.getByRole('slider', { name: 'Route progress', exact: true }).inputValue()),
+    )
+    .toBeCloseTo(selectedDistance, 0);
+  if (isMobile) await page.getByRole('button', { name: 'Collapse preview', exact: true }).click();
+  await expect(name).toBeInViewport({ ratio: 1 });
+  await last.click();
+  await expect(last).toHaveAttribute('aria-expanded', 'false');
+  await expect(last).toContainText('Expand to edit');
+  await expect(name).toHaveCount(0);
+  await last.press('Enter');
+  await expect(last).toHaveAttribute('aria-expanded', 'true');
+  await expect(name).toHaveValue('Crossing 12');
+  await last.press('Space');
+  await expect(last).toHaveAttribute('aria-expanded', 'false');
+  await expect(name).toHaveCount(0);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await last.press('Enter');
+  await expect(name).toHaveValue('Crossing 12');
+  await expect(name).toBeVisible();
+  expect(
+    await page.locator('.station-editor-reveal').evaluate((el) => {
+      const style = getComputedStyle(el);
+      return (
+        style.animationName === 'none' ||
+        style.animationDuration.split(',').every((duration) => {
+          const value = Number.parseFloat(duration);
+          return (duration.trim().endsWith('ms') ? value / 1000 : value) <= 0.001;
+        })
+      );
+    }),
+  ).toBe(true);
+  await pending.getByRole('button', { name: /Crossing 01/ }).click();
+  const first = rows.filter({ hasText: 'Crossing 01' });
+  await expect(first).toBeFocused();
+  await expect(first).toHaveAttribute('aria-expanded', 'true');
+  await expect(last).toHaveAttribute('aria-expanded', 'false');
+  await expect(name).toHaveValue('Crossing 01');
+  await expect(page.locator('.station-editor')).toHaveCount(1);
+  const editorId = await first.getAttribute('aria-controls');
+  expect(editorId).not.toBeNull();
+  await expect(
+    page.locator('.station-item').filter({ has: first }).locator('.station-editor'),
+  ).toHaveAttribute('id', editorId!);
+  await next.click();
+  await expect(name).toHaveValue('Crossing 02');
+  await page.getByRole('button', { name: 'Confirm station position', exact: true }).click();
+  await expect(rows.filter({ hasText: 'Crossing 02' })).not.toContainText(
+    'Position needs confirmation',
+  );
+  await expect(rows.filter({ hasText: 'Position needs confirmation' })).toHaveCount(11);
+  await expect(pending.getByRole('button', { name: /Crossing 02/ })).toHaveCount(0);
+  await next.click();
+  await expect(name).toHaveValue('Crossing 03');
+  await rows.filter({ hasText: 'Crossing 12' }).click();
+  await next.click();
+  await expect(name).toHaveValue('Crossing 01');
+  await next.click();
+  await expect(name).toHaveValue('Crossing 03');
+  await expect(rows).toHaveCount(14);
+  await expect(page.getByRole('button', { name: 'Next: Elevation', exact: true })).toBeDisabled();
+  await noOverflow(page);
+});
+
+test('keeps advanced elevation settings visible and preserves their values', async ({ page }) => {
+  await importText(page, gpx(complete));
+  await confirmRoute(page);
+  await step(page, 'Elevation');
+  await expect(page.getByText('Source elevation is complete', { exact: true })).toBeVisible();
+  await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
+  const advanced = page.getByRole('region', {
+    name: 'Advanced elevation settings',
+    exact: true,
+  });
+  await expect(advanced).toBeVisible();
+  const interval = page.getByLabel('Sampling interval (m)', { exact: true });
+  const smoothing = page.getByLabel('Smoothing window (m)', { exact: true });
+  const comparison = page.getByRole('checkbox', {
+    name: 'Compare original elevation',
+    exact: true,
+  });
+  await expect(interval).toBeVisible();
+  await expect(smoothing).toBeVisible();
+  await expect(advanced.locator('summary')).toHaveCount(0);
+  await expect(interval).toHaveValue('10');
+  await expect(smoothing).toHaveValue('0');
+  await expect(comparison).toBeChecked();
+  // Delay the next real processing task so the pending summary remains observable.
+  await page.evaluate(() => {
+    const original = Worker.prototype.postMessage;
+    let delayed = false;
+    Worker.prototype.postMessage = function (
+      this: Worker,
+      message: unknown,
+      options?: Transferable[] | StructuredSerializeOptions,
+    ) {
+      const args = options === undefined ? [message] : [message, options];
+      if (
+        !delayed &&
+        typeof message === 'object' &&
+        message !== null &&
+        'type' in message &&
+        message.type === 'process'
+      ) {
+        delayed = true;
+        setTimeout(() => Reflect.apply(original, this, args), 1500);
+      } else Reflect.apply(original, this, args);
+    };
+  });
+  await interval.selectOption('20');
+  await expect(page.getByText('Checking elevation…', { exact: true })).toBeVisible();
+  await expect(page.getByText('Source elevation is complete', { exact: true })).toBeHidden();
+  await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.getByText('Source elevation is complete', { exact: true })).toBeVisible();
+  await smoothing.selectOption('30');
+  await comparison.uncheck();
+  await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(interval).toBeVisible();
+  await step(page, 'Review');
+  await step(page, 'Elevation');
+  await expect(interval).toBeVisible();
+  await expect(interval).toHaveValue('20');
+  await expect(smoothing).toHaveValue('30');
+  await expect(comparison).not.toBeChecked();
+  await step(page, 'Export');
+  await expect(page.getByRole('radio')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Send to device', exact: true })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  const details = page.getByRole('region', { name: 'File details', exact: true });
+  await expect(details).toBeVisible();
+  await expect(details.locator('summary')).toHaveCount(0);
+  await expect(page.getByText('TRL-X Route 1.0', { exact: true })).toBeVisible();
+  await expect(page.getByText('Revision', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Download processing report', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      'The RTE file is validated before download. Unchanged content keeps its revision; changed content increments it.',
+      { exact: true },
+    ),
+  ).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeEnabled();
+});
+
+test('repairs an invalid restored value in the visible advanced elevation settings', async ({
+  page,
+}) => {
+  await importText(page, gpx(complete));
+  await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(
+    page.getByRole('status', { name: 'Saved on this device', exact: true }),
+  ).toBeVisible();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open('trl-x-route-studio');
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const tx = db.transaction('drafts', 'readwrite');
+          const store = tx.objectStore('drafts');
+          const current = store.get('current');
+          current.onsuccess = () => {
+            const draft = current.result;
+            draft.editor.options.elevationIntervalM = 0;
+            store.put(draft, 'current');
+          };
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onerror = () => {
+            db.close();
+            reject(tx.error);
+          };
+        };
+      }),
+  );
+  await page.reload();
+  await page.getByRole('button', { name: /Continue editing/ }).click();
+  await confirmRoute(page);
+  await step(page, 'Elevation');
+  const advanced = page.getByRole('region', {
+    name: 'Advanced elevation settings',
+    exact: true,
+  });
+  const interval = page.getByLabel('Sampling interval (m)', { exact: true });
+  await expect(page.locator('.issue[data-code="OPTIONS_INVALID"]')).toBeVisible();
+  await expect(advanced).toBeVisible();
+  await expect(interval).toBeVisible();
+  await expect(interval).toHaveValue('0');
+  await expect(page.getByRole('button', { name: 'Next: Review', exact: true })).toBeDisabled();
+  await interval.selectOption('20');
+  await expect(page.getByText('Source elevation is complete', { exact: true })).toBeVisible();
+  await expect(page.locator('.issue[data-code="OPTIONS_INVALID"]')).toHaveCount(0);
+  await expect(interval).toBeVisible();
+  await expect(interval).toHaveValue('20');
+  await expect(page.getByRole('button', { name: 'Next: Review', exact: true })).toBeEnabled();
+});
+
+test('fills imported interior gaps by default and preserves an explicit source-only choice', async ({
+  page,
+}) => {
   await importText(
     page,
     gpx([
@@ -324,9 +718,14 @@ test('interpolates only an explicitly selected short interior elevation gap', as
   );
   await confirmRoute(page);
   await step(page, 'Elevation');
-  await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
+  await expect(page.getByRole('radio', { name: /Fill gaps and export/ })).toBeChecked();
+  await expect(page.getByText('Interior elevation gaps filled', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Next: Review', exact: true })).toBeEnabled();
   await expect(page.getByRole('radio', { name: /Omit elevation/ })).toHaveCount(0);
+  await page.getByRole('radio', { name: /Use source elevation/ }).check();
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
+  await expect(page.getByText('Elevation needs attention', { exact: true })).toBeVisible();
+  await expect(page.getByText('Advanced elevation settings', { exact: true })).toBeVisible();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Review/ })).toBeDisabled();
   await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await expect(page.locator('#step-progress-help')).toHaveText(
@@ -334,8 +733,21 @@ test('interpolates only an explicitly selected short interior elevation gap', as
   );
   await expect(page.locator('#step-progress-help')).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.getByRole('radio', { name: /Fill gaps and export/ })).toBeChecked();
+  await expect(page.getByText('Interior elevation gaps filled', { exact: true })).toBeVisible();
+  await page.getByRole('radio', { name: /Use source elevation/ }).check();
+  await expect(
+    page.getByRole('status', { name: 'Saved on this device', exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: /Continue editing/ }).click();
+  await confirmRoute(page);
   await step(page, 'Elevation');
+  await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
+  await expect(page.getByRole('button', { name: 'Next: Review', exact: true })).toBeDisabled();
   await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+  await expect(page.getByText('Interior elevation gaps filled', { exact: true })).toBeVisible();
   const exported = await downloadRoute(page);
   expect(exported.route.elevationInfo?.containsFilledValues).toBe(true);
   expect(exported.route.elev!.at(-1)!.upDm).toBe(200);
@@ -420,7 +832,7 @@ test('keeps missing endpoint elevation blocked while allowing route previews', a
   );
   await confirmRoute(page);
   await step(page, 'Elevation');
-  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+  await expect(page.getByRole('radio', { name: /Fill gaps and export/ })).toBeChecked();
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toContainText(
     'Missing start or finish elevations',
   );
@@ -430,7 +842,7 @@ test('keeps missing endpoint elevation blocked while allowing route previews', a
   await page.getByRole('slider', { name: 'Route progress', exact: true }).fill('300');
 });
 
-test('warns about explicitly interpolated long interior gaps and exports a complete profile', async ({
+test('warns about interior gaps filled by default and exports a complete profile', async ({
   page,
 }) => {
   await importText(
@@ -443,7 +855,7 @@ test('warns about explicitly interpolated long interior gaps and exports a compl
   );
   await confirmRoute(page);
   await step(page, 'Elevation');
-  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+  await expect(page.getByRole('radio', { name: /Fill gaps and export/ })).toBeChecked();
   await expect(page.locator('.issue[data-code="ELEVATION_LARGE_GAP"]')).toHaveCount(1);
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toHaveCount(0);
   const exported = await downloadRoute(page);
@@ -456,8 +868,7 @@ test('requires corrected source data when every elevation is missing', async ({ 
   await importText(page, gpx(complete.map(([lat, lon]) => [lat, lon, null])));
   await confirmRoute(page);
   await step(page, 'Elevation');
-  await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
-  await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+  await expect(page.getByRole('radio', { name: /Fill gaps and export/ })).toBeChecked();
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
   await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
@@ -479,12 +890,51 @@ test('keeps KML altitude uncertainty explicit and records accepted provenance', 
   await confirmRoute(page);
   await step(page, 'Elevation');
   await page.getByRole('radio', { name: /Use source elevation/ }).check();
-  const acceptance = page.getByRole('checkbox', { name: /I confirm these values/ });
+  const acceptance = page
+    .locator('.panel-footer')
+    .getByRole('checkbox', { name: /I confirm these values/ });
+  await expect(
+    page.locator('.panel-fields').getByRole('checkbox', { name: /I confirm these values/ }),
+  ).toHaveCount(0);
+  await expect(page.locator('.issue[data-code="ELEVATION_UNCONFIRMED"]')).toHaveCount(0);
   await expect(acceptance).not.toBeChecked();
   await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await step(page, 'Elevation');
   await acceptance.check();
+  await expect(page.getByRole('button', { name: 'Next: Review', exact: true })).toBeEnabled();
+  // Keep a real replacement import pending to exercise the fixed footer's busy lock.
+  await page.evaluate(() => {
+    const original = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (
+      this: Worker,
+      message: unknown,
+      options?: Transferable[] | StructuredSerializeOptions,
+    ) {
+      const args = options === undefined ? [message] : [message, options];
+      if (
+        typeof message === 'object' &&
+        message !== null &&
+        'type' in message &&
+        message.type === 'import'
+      ) {
+        setTimeout(() => Reflect.apply(original, this, args), 1500);
+      } else Reflect.apply(original, this, args);
+    };
+  });
+  await page.getByLabel('Choose route file', { exact: true }).setInputFiles({
+    name: 'replacement.gpx',
+    mimeType: 'application/xml',
+    buffer: Buffer.from(gpx(complete)),
+  });
+  await expect(page.locator('.busy-banner')).toContainText('Reading your route…');
+  await expect(acceptance).toBeDisabled();
+  await expect(acceptance).toBeChecked();
+  await expect(page.getByRole('button', { name: 'Next: Review', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.locator('.busy-banner')).toHaveCount(0);
+  await expect(acceptance).toBeEnabled();
+  await expect(acceptance).toBeChecked();
   const exported = await downloadRoute(page);
   expect(exported.route.elevationInfo).toMatchObject({ verticalDatum: 0, quality: 1 });
   expect(exported.route.elev!.at(-1)!.upDm).toBe(200);
@@ -644,7 +1094,9 @@ test('restored diagnostics follow the selected language without displaying raw c
 
 test('magnetic declination survives drafts and exports as optional metadata', async ({ page }) => {
   await importText(page, gpx(complete));
-  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
   await page
     .getByRole('combobox', { name: 'Declination source', exact: true })
     .selectOption('manual');
@@ -669,7 +1121,9 @@ test('magnetic declination survives drafts and exports as optional metadata', as
   ).toBeVisible();
   await page.reload();
   await page.getByRole('button', { name: /Continue editing/ }).click();
-  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
   await expect(page.getByLabel('Declination (°)', { exact: true })).toHaveValue('-3.5');
   const output = await downloadRoute(page);
   expect(output.route.magneticDeclination).toEqual({
@@ -682,7 +1136,9 @@ test('magnetic declination survives drafts and exports as optional metadata', as
     validUntil: '2027-10-15',
   });
   await step(page, 'Route');
-  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
   await page.getByRole('checkbox', { name: 'Include magnetic declination', exact: true }).uncheck();
   const omitted = await downloadRoute(page);
   expect(omitted.route.magneticDeclination).toBeUndefined();
@@ -719,14 +1175,17 @@ test('automatically fetches declination and removes the old value when a subsequ
     await route.fulfill({ json: bgsResult(url) });
   });
   await importText(page, gpx(complete));
-  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Declination source', exact: true })).toHaveValue(
     'auto',
   );
   await page.getByLabel('Calculation date (UTC)', { exact: true }).fill('2026-10-16');
-  await expect(page.getByRole('status').filter({ hasText: 'Reference fetched:' })).toContainText(
-    '-7.46°',
-  );
+  const available = page.getByRole('status').filter({ hasText: 'Reference fetched:' });
+  await expect(available).toHaveText('Reference fetched: -7.46°');
+  await expect(available).not.toContainText('WMM2025');
+  await expect(available).not.toContainText('2026-10-16');
   const output = await downloadRoute(page);
   expect(output.route.magneticDeclination).toMatchObject({
     declinationCdeg: -746,
@@ -738,7 +1197,9 @@ test('automatically fetches declination and removes the old value when a subsequ
   expect(requests.at(-1)!.searchParams.get('altitude')).toBe('0');
   online = false;
   await step(page, 'Route');
-  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
   await page.getByLabel('Calculation date (UTC)', { exact: true }).fill('2026-10-17');
   await expect(
     page.getByRole('status').filter({ hasText: 'Magnetic declination unavailable' }),
@@ -751,7 +1212,9 @@ test('offline automatic lookup leaves optional metadata absent and still allows 
   page,
 }) => {
   await importText(page, gpx(complete));
-  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole('status').filter({ hasText: 'Magnetic declination unavailable' }),
   ).toBeVisible();
@@ -772,7 +1235,9 @@ test('a late automatic declination response cannot overwrite a manual value', as
   });
   await importText(page, gpx(complete));
   await expect.poll(() => requested).toBe(true);
-  await page.getByText('Magnetic declination (optional)', { exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Magnetic declination', exact: true }),
+  ).toBeVisible();
   await page
     .getByRole('combobox', { name: 'Declination source', exact: true })
     .selectOption('manual');

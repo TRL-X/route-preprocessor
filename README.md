@@ -27,14 +27,16 @@ npm run preview
    starting point.
 3. Edit stations, their positions and stage boundaries. Confirm a passing position
    when a landmark matches more than one part of the route.
-4. Review elevation, sampling and smoothing. Internal gaps require explicit
-   interpolation; uncertain KML heights require confirmation. Missing endpoint or
-   whole-route elevation must be corrected in the source file.
+4. Review elevation, sampling and smoothing. New imports with missing heights
+   default to filling internal gaps; complete routes use source elevation.
+   Uncertain KML heights require confirmation. Missing endpoint or whole-route
+   elevation must be corrected in the source file.
 5. Inspect the linked map and elevation profile, stage statistics and processing
    issues. The original profile remains available for comparison.
-6. Export the `.rte` file after encoding and a full validation pass, or upload it
-   directly to a device over Bluetooth. A separate
-   processing report records the input hash, settings and diagnostics.
+6. On Export, use **Download .rte** to encode, validate and download the route, or
+   **Send to device** to open Bluetooth connection and upload controls. File
+   details and a separate processing report show the output metadata, input hash,
+   settings and diagnostics.
 
 The editor preserves parsed source data, supports undo and saves a local draft in
 IndexedDB. Background processing can be cancelled. Re-exporting the latest content
@@ -53,8 +55,10 @@ is unavailable.
 
 ## Bluetooth upload
 
-On the Export step, use **Connect device**, select a device exposing the mcumgr
-SMP Bluetooth service, and choose **Upload route**. The validated RTE bytes go
+On the Export step, use **Send to device** to expand the upload controls, then
+**Connect device**, select a device exposing the mcumgr SMP Bluetooth service,
+and choose **Upload route**. **Download .rte** remains available above the upload
+controls. The validated RTE bytes go
 directly from the browser to the device; no server or nRF app is needed. The
 target directory defaults to `/SD:/routes/` and is saved in this browser. The
 generated `.rte` filename is appended to that directory. Create the directory on

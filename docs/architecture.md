@@ -6,31 +6,32 @@ layouts share the same editing model and processing rules.
 
 ## Module boundaries
 
-| Module                                | Responsibility                                                               |
-| ------------------------------------- | ---------------------------------------------------------------------------- |
-| `src/App.tsx`                         | UI coordination, view state and rendering                                    |
-| `src/app/useEditorSession.ts`         | Editor state, undo, draft loading and saving                                 |
-| `src/app/useRouteProcessing.ts`       | Debounced processing and automatic declination                               |
-| `src/app/useRouteFiles.ts`            | File operation status, cancellation and export feedback                      |
-| `src/app/route-files.ts`              | Import, rebuild, revision allocation, encoding and downloads                 |
-| `src/app/editor.ts`                   | Editor, revision ledger and versioned draft types                            |
-| `src/app/draft-schema.ts`             | Draft validation and supported migrations                                    |
-| `src/app/flow.ts`                     | Wizard completion, navigation, confirmation invalidation and issue ownership |
-| `src/app/worker-client.ts`            | Worker creation, results and cancellation                                    |
-| `src/app/drafts.ts`                   | IndexedDB drafts and export revision reservations                            |
-| `src/i18n`                            | Locale discovery, preferences, typed messages and formatting                 |
-| `src/features`                        | Workflow controls, issue visibility and stage summaries                      |
-| `src/device`                          | mcumgr SMP frames, CBOR and browser Bluetooth file transport                 |
-| `src/components/RouteMap.tsx`         | MapLibre rendering and route/station interaction                             |
-| `src/components/ElevationChart.tsx`   | Profile rendering and linked cursor                                          |
-| `src/workers/route.worker.ts`         | Import, reference, processing and export task entry points                   |
-| `src/core/types.ts`                   | Source, editor and encoded route types, with units in field names            |
-| `src/core/policy.ts`                  | Processing defaults, parameter ranges, controls and browser budgets          |
-| `src/core/diagnostics.ts`             | Known diagnostic codes and producer types                                    |
-| `src/core/import.ts`                  | XML parsing, input validation and import limits                              |
-| `src/core/process.ts`                 | Reference distance, matching, geometry, elevation and stages                 |
-| `src/core/cbor.ts`, `src/core/rte.ts` | Deterministic encoding, validation and route queries                         |
-| `src/core/declination.ts`             | BGS magnetic declination lookup                                              |
+| Module                                         | Responsibility                                                                      |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `src/App.tsx`                                  | UI coordination, view state and rendering                                           |
+| `src/app/useEditorSession.ts`                  | Editor state, undo, draft loading and saving                                        |
+| `src/app/useRouteProcessing.ts`                | Debounced processing and automatic declination                                      |
+| `src/app/useRouteFiles.ts`                     | File operation status, cancellation and export feedback                             |
+| `src/app/route-files.ts`                       | Import, rebuild, revision allocation, encoding and downloads                        |
+| `src/app/editor.ts`                            | Editor, revision ledger and versioned draft types                                   |
+| `src/app/draft-schema.ts`                      | Draft validation and supported migrations                                           |
+| `src/app/flow.ts`                              | Wizard completion, navigation, confirmation invalidation and issue ownership        |
+| `src/app/worker-client.ts`                     | Worker creation, results and cancellation                                           |
+| `src/app/drafts.ts`                            | IndexedDB drafts and export revision reservations                                   |
+| `src/i18n`                                     | Locale discovery, preferences, typed messages and formatting                        |
+| `src/features`                                 | Workflow controls, issue visibility and stage summaries                             |
+| `src/features/elevation/ElevationSettings.tsx` | Elevation status and source controls, with optional sampling and smoothing settings |
+| `src/device`                                   | mcumgr SMP frames, CBOR and browser Bluetooth file transport                        |
+| `src/components/RouteMap.tsx`                  | MapLibre rendering and route/station interaction                                    |
+| `src/components/ElevationChart.tsx`            | Profile rendering and linked cursor                                                 |
+| `src/workers/route.worker.ts`                  | Import, reference, processing and export task entry points                          |
+| `src/core/types.ts`                            | Source, editor and encoded route types, with units in field names                   |
+| `src/core/policy.ts`                           | Processing defaults, parameter ranges, controls and browser budgets                 |
+| `src/core/diagnostics.ts`                      | Known diagnostic codes and producer types                                           |
+| `src/core/import.ts`                           | XML parsing, input validation and import limits                                     |
+| `src/core/process.ts`                          | Reference distance, matching, geometry, elevation and stages                        |
+| `src/core/cbor.ts`, `src/core/rte.ts`          | Deterministic encoding, validation and route queries                                |
+| `src/core/declination.ts`                      | BGS magnetic declination lookup                                                     |
 
 UI code uses worker tasks and core types. Workers call the core algorithms. Core
 code has no React, DOM, MapLibre, persistence or download dependency; its XML
@@ -56,8 +57,41 @@ navigation. The feedback explains existing workflow restrictions through
 `src/app/flow.ts`; it does not introduce additional completion requirements.
 Short phone layouts reduce repeated headings and spacing to keep the fields and
 fixed footer usable; the preview can still be collapsed for more editing space.
+The import card and stepper share the same horizontal bounds as the editing
+workspace. Route simplification and magnetic-declination controls remain expanded;
+the simplification slider uses the UI range defined in `src/core/policy.ts`.
 Rendering and display simplification leave the computational profile and its
 accumulated ascent and descent unchanged.
+
+Station controls expand directly below the selected row without changing station
+order. Rows show an expand/collapse action, and opening animates the editor height
+unless reduced motion is requested. The pending-station list links each station
+name and distance to its editor, focuses its row and updates the linked cursor.
+The next-unconfirmed action still cycles through pending positions; neither action
+confirms a position automatically. The list replaces duplicate unconfirmed-position
+diagnostics on Stations without changing validation or report contents. Map and
+profile selection bring the matching row into view.
+
+The elevation view distinguishes source completeness, required user confirmation
+and the current processing result. It only reports filled gaps after the current
+route records estimated heights. New imports select gap filling when the normalized
+reference has missing heights; complete references select source mode. Restored
+drafts and reference rebuilds retain the user's mode. Sampling, smoothing and
+source comparison remain visible in the expanded advanced settings. KML elevation
+confirmation stays in the fixed footer, with its checkbox disabled during file
+operations or transfers. The status and footer replace the duplicate confirmation
+diagnostic on Elevation; other errors, reports and core validation remain unchanged.
+Missing endpoint or whole-route heights still block export in either mode. Short
+phone layouts reserve more room for editing when elevation confirmation is present.
+
+Export shows Download .rte and Send to device as direct actions. Download starts
+the existing export preparation and download flow. Send to device toggles the
+initially closed Bluetooth connection and upload controls. Both actions remain
+visible; hiding the upload controls keeps their component mounted, preserving the
+connection and feedback. Both actions are disabled during export or transfer,
+while upload cancellation remains outside the disabled editor fieldset. File
+details and the processing report remain visible below the controls. Export
+validation and revision allocation follow the existing rules.
 
 ## State and processing
 

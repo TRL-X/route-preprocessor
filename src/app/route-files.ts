@@ -59,7 +59,12 @@ export async function importRouteFile(file: File, signal: AbortSignal): Promise<
     ...data,
     declinationMode: 'auto',
     declinationQueryDate: utcToday(),
-    options: { ...PROCESSING_DEFAULTS },
+    options: {
+      ...PROCESSING_DEFAULTS,
+      elevationMode: data.reference.points.some((point) => point.elevation === null)
+        ? 'interpolate'
+        : 'source',
+    },
     name: data.file.routes[0].name || file.name.replace(/\.(gpx|kml)$/i, ''),
     routeId: crypto.getRandomValues(new Uint8Array(16)),
     inputSha256: hash,

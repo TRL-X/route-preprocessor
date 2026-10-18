@@ -217,13 +217,29 @@ test('unsupported browsers keep route download available and explain Bluetooth s
   await installBluetooth(page, false);
   await page.goto('/');
   await openExport(page);
+  await expect(page.getByRole('radio')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeEnabled();
+  const send = page.getByRole('button', { name: 'Send to device', exact: true });
   const upload = page.getByRole('region', { name: 'Bluetooth upload', exact: true });
+  await expect(send).toHaveAttribute('aria-expanded', 'false');
+  await expect(send).toHaveAttribute('aria-controls', /\S+/);
+  const panelId = await send.getAttribute('aria-controls');
+  await expect(page.locator(`[id="${panelId}"]`)).toBeAttached();
+  await expect(upload).toBeHidden();
+  await send.click();
+  await expect(send).toHaveAttribute('aria-expanded', 'true');
   await expect(upload).toContainText('Bluetooth upload requires Chrome on a computer or Android.');
   await expect(upload.getByRole('button', { name: 'Connect device', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeEnabled();
+  await expect(page.getByRole('region', { name: 'File details', exact: true })).toBeVisible();
+  await send.click();
+  await expect(send).toHaveAttribute('aria-expanded', 'false');
+  await expect(upload).toBeHidden();
   await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeEnabled();
 });
 
-test('remembers the target directory and uploads the same validated RTE bytes as download', async ({
+test('preserves the device connection and directory across toggles and downloads, then uploads the same bytes', async ({
   page,
   browserName,
 }) => {
@@ -231,6 +247,8 @@ test('remembers the target directory and uploads the same validated RTE bytes as
   await installBluetooth(page);
   await page.goto('/');
   await openExport(page);
+  const send = page.getByRole('button', { name: 'Send to device', exact: true });
+  await send.click();
   const upload = page.getByRole('region', { name: 'Bluetooth upload', exact: true });
   const directory = upload.getByRole('textbox', { name: 'Target directory', exact: true });
   await expect(directory).toHaveValue('/SD:/routes/');
@@ -245,15 +263,29 @@ test('remembers the target directory and uploads the same validated RTE bytes as
     .getByRole('checkbox', { name: 'I have checked the route and direction on the map.' })
     .check();
   await visitExport(page);
+  await expect(send).toHaveAttribute('aria-expanded', 'false');
+  await send.click();
   await expect(directory).toHaveValue('/SD:/custom-routes/');
 
+  await upload.getByRole('button', { name: 'Connect device', exact: true }).click();
+  await expect(upload).toContainText('Connected to Route test device');
   const downloading = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download .rte', exact: true }).click();
   const download = await downloading;
   const bytes = new Uint8Array(await readFile((await download.path())!));
   expect(decodeRte(bytes).name).toBe('Bluetooth forest trail');
-  await upload.getByRole('button', { name: 'Connect device', exact: true }).click();
+  await expect(send).toHaveAttribute('aria-expanded', 'true');
   await expect(upload).toContainText('Connected to Route test device');
+  await expect(
+    page.getByRole('button', { name: 'Download processing report', exact: true }),
+  ).toBeVisible();
+  await send.click();
+  await expect(send).toHaveAttribute('aria-expanded', 'false');
+  await expect(upload).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeEnabled();
+  await send.click();
+  await expect(upload).toContainText('Connected to Route test device');
+  await expect(directory).toHaveValue('/SD:/custom-routes/');
   await upload.getByRole('button', { name: 'Upload route', exact: true }).click();
   const path = `/SD:/custom-routes/${download.suggestedFilename()}`;
   await expect(upload).toContainText(`Uploaded to ${path}`);
@@ -261,6 +293,9 @@ test('remembers the target directory and uploads the same validated RTE bytes as
   expect(peer.name).toBe(path);
   expect(peer.length).toBe(bytes.length);
   expect(Uint8Array.from(peer.bytes)).toEqual(bytes);
+  await send.click();
+  await send.click();
+  await expect(upload).toContainText(`Uploaded to ${path}`);
 });
 
 test('cancels while preparing the RTE without sending Bluetooth data or leaving navigation locked', async ({
@@ -292,14 +327,21 @@ test('cancels while preparing the RTE without sending Bluetooth data or leaving 
   });
   await page.goto('/');
   await openExport(page);
+  const send = page.getByRole('button', { name: 'Send to device', exact: true });
+  await send.click();
   const upload = page.getByRole('region', { name: 'Bluetooth upload', exact: true });
   await upload.getByRole('button', { name: 'Connect device', exact: true }).click();
   await upload.getByRole('button', { name: 'Upload route', exact: true }).click();
   await expect(upload).toContainText('Generating and validating the RTE file');
+  await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
+  await expect(send).toBeDisabled();
+  await expect(upload.getByRole('button', { name: 'Cancel upload', exact: true })).toBeEnabled();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Route/ })).toBeDisabled();
   await upload.getByRole('button', { name: 'Cancel upload', exact: true }).click();
   await expect(upload).toContainText('Upload cancelled.');
   await expect(page.getByRole('navigation').getByRole('button', { name: /Route/ })).toBeEnabled();
+  await expect(send).toBeEnabled();
+  await expect(send).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeEnabled();
   await expect
     .poll(() =>
