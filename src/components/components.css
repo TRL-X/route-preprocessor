@@ -35,7 +35,7 @@
   justify-items: center;
   gap: 4px;
   color: #466048;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.1;
   pointer-events: none;
@@ -67,8 +67,8 @@
 .route-map__controls button {
   display: grid;
   place-items: center;
-  width: 43px;
-  height: 43px;
+  width: 44px;
+  height: 44px;
   border: 0;
   padding: 0;
   border-radius: 0;
@@ -108,11 +108,14 @@
   left: 20px;
   bottom: 62px;
   z-index: 2;
+  max-width: calc(100% - 40px);
   padding: 5px 8px;
   border-radius: 5px;
   background: #fffdf5d9;
   color: #60705b;
-  font-size: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
   pointer-events: none;
 }
 
@@ -136,7 +139,7 @@
 
 .route-map .maplibregl-ctrl-attrib {
   font-family: inherit;
-  font-size: 10px;
+  font-size: 12px;
   background: #fffdf5dd;
 }
 
@@ -184,7 +187,7 @@
 .elevation-chart__title h3 {
   margin: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 650;
 }
 
@@ -193,12 +196,12 @@
   align-items: center;
   gap: 12px;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 .elevation-chart__readout span {
-  color: #7d8674;
+  color: #56645c;
 }
 
 .elevation-chart__svg {
@@ -212,8 +215,8 @@
 
 .elevation-chart__axis {
   font-family: inherit;
-  font-size: 10px;
-  fill: #8a9281;
+  font-size: 12px;
+  fill: #56645c;
 }
 
 .elevation-chart__station {
@@ -227,7 +230,7 @@
   justify-content: center;
   align-items: center;
   gap: 18px;
-  color: #8a9381;
+  color: #56645c;
   font-size: 12px;
   text-align: center;
 }
@@ -264,6 +267,7 @@
   .route-map__status {
     left: 13px;
     bottom: 89px;
+    max-width: calc(100% - 26px);
   }
 
   .elevation-chart {

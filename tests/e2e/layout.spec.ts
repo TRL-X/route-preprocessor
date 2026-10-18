@@ -48,9 +48,18 @@ test('expanded processing notes can scroll to their final item at the reported w
     ),
   });
   await expect(page.locator('.issue[data-code="LARGE_SOURCE_EDGE"]')).toBeVisible();
+  await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#step-progress-help')).toHaveText(
+    'Confirm the route and direction to continue.',
+  );
   const notes = page.locator('.issues-list');
   await expect(notes.locator('summary')).toHaveCount(0);
   await expect(notes.locator('.issue').first()).toBeVisible();
+  const confirmation = page.getByRole('checkbox', {
+    name: 'I have checked the route and direction on the map.',
+  });
+  await expect(confirmation).toBeInViewport();
+  const confirmationTop = (await confirmation.boundingBox())!.y;
   const body = page.locator('.panel-body');
   const dimensions = await body.evaluate((el) => ({
     height: el.clientHeight,
@@ -77,14 +86,9 @@ test('expanded processing notes can scroll to their final item at the reported w
         }),
     )
     .toBe(true);
-  const confirmation = page.getByRole('checkbox', {
-    name: 'I have checked the route and direction on the map.',
-  });
   await expect(confirmation).toBeInViewport();
-  expect((await confirmation.boundingBox())!.y).toBeGreaterThanOrEqual(
-    (await notes.boundingBox())!.y + (await notes.boundingBox())!.height,
-  );
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeVisible();
+  expect((await confirmation.boundingBox())!.y).toBe(confirmationTop);
+  await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeInViewport();
   await expectWindowSizedEditor(page);
   await page.screenshot({
     path: testInfo.outputPath('processing-notes-scroll.png'),
@@ -121,6 +125,54 @@ test('editing stays inside the window when settings expand or the window is resi
       .getByLabel('Route name', { exact: true })
       .fill('A route name that is much longer than the available title space '.repeat(3));
     await expectWindowSizedEditor(page);
+  }
+});
+
+test('short phones keep confirmation and navigation visible while route fields remain usable', async ({
+  page,
+}) => {
+  await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#step-progress-help')).toHaveText(
+    'Confirm the route and direction to continue.',
+  );
+  for (const height of [480, 568]) {
+    await page.setViewportSize({ width: 390, height });
+    await expect(page.locator('.panel-footer .check-field')).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('#step-progress-help')).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(page.getByRole('button', { name: 'Next: Stations', exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+    const name = page.getByLabel('Route name', { exact: true });
+    await name.scrollIntoViewIfNeeded();
+    await name.focus();
+    await expect(name).toBeFocused();
+    await expect(name).toBeInViewport({ ratio: 1 });
+    await expect
+      .poll(() =>
+        name.evaluate((el) => {
+          const input = el.getBoundingClientRect();
+          const body = el.closest('.panel-body')!.getBoundingClientRect();
+          return (
+            body.height >= input.height &&
+            input.top >= body.top - 1 &&
+            input.bottom <= body.bottom + 1
+          );
+        }),
+      )
+      .toBe(true);
+    const body = page.locator('.panel-body');
+    const expandedHeight = (await body.boundingBox())!.height;
+    const collapse = page.getByRole('button', { name: 'Collapse preview', exact: true });
+    await expect(collapse).toBeInViewport({ ratio: 1 });
+    await collapse.click();
+    await expect
+      .poll(async () => (await body.boundingBox())!.height)
+      .toBeGreaterThan(expandedHeight + 80);
+    await expectWindowSizedEditor(page);
+    await page.getByRole('button', { name: 'Expand preview', exact: true }).click();
   }
 });
 
@@ -229,6 +281,25 @@ test('phone preview can be collapsed for editing and reopened without losing the
     .toBeLessThan(2);
   await expectWindowSizedEditor(page);
   await page.screenshot({ path: testInfo.outputPath('phone-editor.png'), fullPage: true });
+  await page
+    .getByRole('checkbox', { name: 'I have checked the route and direction on the map.' })
+    .check();
+  await page.getByRole('button', { name: 'Next: Stations', exact: true }).click();
+  await expect(page.locator('.panel-heading h2')).toHaveText('Stations');
+  await expect(page.getByRole('button', { name: 'Expand preview', exact: true })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  await expect(page.getByRole('button', { name: 'Map', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.locator('.map-panel')).toBeHidden();
+  await page.getByRole('button', { name: 'Expand preview', exact: true }).click();
+  await expect(page.locator('.map-panel')).toBeVisible();
+  await expect(progress).toHaveValue('8000');
+  await page.getByRole('button', { name: 'Profile', exact: true }).click();
+  await page.getByRole('button', { name: 'Collapse preview', exact: true }).click();
   // View selection also reopens the preview, including after a breakpoint change.
   await page.setViewportSize({ width: 865, height: 827 });
   await expect(page.locator('.profile-panel')).toBeVisible();

@@ -45,7 +45,7 @@ async function confirmRoute(page: Page) {
   await page
     .getByRole('checkbox', { name: 'I have checked the route and direction on the map.' })
     .check();
-  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await page.getByRole('button', { name: 'Next: Stations', exact: true }).click();
   await expect(page.locator('.panel-heading h2')).toHaveText('Stations');
 }
 async function downloadRoute(page: Page) {
@@ -136,7 +136,7 @@ test('cannot bypass route confirmation or change steps during a pending export',
       page.getByRole('navigation').getByRole('button', { name: new RegExp(name) }),
     ).toBeDisabled();
   }
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await confirmRoute(page);
   await expect(page.getByRole('navigation').getByRole('button', { name: /Review/ })).toBeDisabled();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
@@ -158,11 +158,80 @@ test('cannot bypass route confirmation or change steps during a pending export',
   await expect(navigation.getByRole('button', { name: /Route/ })).toBeEnabled();
 });
 
+test('keeps the next action visible and follows each editing step with the relevant preview', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1024, height: 600 },
+    { width: 390, height: 667 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await importText(page, gpx(complete));
+    const confirmation = page.getByRole('checkbox', {
+      name: 'I have checked the route and direction on the map.',
+    });
+    const next = page.getByRole('button', { name: 'Next: Stations', exact: true });
+    const reason = page.locator('#step-progress-help');
+    await expect(reason).toHaveText('Confirm the route and direction to continue.');
+    await expect(reason).toBeInViewport({ ratio: 1 });
+    await expect(confirmation).toBeInViewport({ ratio: 1 });
+    await expect(next).toBeInViewport({ ratio: 1 });
+    await expect(next).toBeDisabled();
+    await expect(next).toHaveAttribute('aria-describedby', 'step-progress-help');
+    await expect(page.getByRole('button', { name: 'Map', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await page.getByRole('button', { name: 'Profile', exact: true }).click();
+    const progress = page.getByRole('slider', { name: 'Route progress', exact: true });
+    await progress.fill('30');
+    await page.getByLabel('Route name', { exact: true }).fill('Forest trail updated');
+    await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+    await expect(page.getByRole('button', { name: 'Profile', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await confirmation.check();
+    await expect(next).toBeEnabled();
+    await next.click();
+    await expect(page.locator('.panel-heading h2')).toHaveText('Stations');
+    await expect(page.getByRole('button', { name: 'Map', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(progress).toHaveValue('30');
+    await page.getByRole('button', { name: 'Next: Elevation', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Profile', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(page.locator('.profile-panel')).toBeVisible();
+    await expect(progress).toHaveValue('30');
+    await page.getByRole('button', { name: 'Map', exact: true }).click();
+    await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
+    await expect(page.locator('.visual-workspace')).toHaveAttribute('aria-busy', 'false');
+    await expect(page.getByRole('button', { name: 'Map', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+    await page.getByRole('button', { name: 'Profile', exact: true }).click();
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+    await expect(page.locator('.panel-heading h2')).toHaveText('Route');
+    await expect(page.getByRole('button', { name: 'Map', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(progress).toHaveValue('30');
+    await noOverflow(page);
+  }
+});
+
 test('edits stations, undoes deletion, exports valid bytes, and restores a draft with stable revisions', async ({
   page,
 }) => {
   await importText(page, gpx(complete));
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await confirmRoute(page);
   if (await page.getByRole('button', { name: 'Profile', exact: true }).isVisible())
     await page.getByRole('button', { name: 'Profile', exact: true }).click();
@@ -223,7 +292,11 @@ test('requires a deliberate visit choice at repeated crossings', async ({ page }
   await expect(
     page.getByRole('navigation').getByRole('button', { name: /Elevation/ }),
   ).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
+  await expect(page.locator('#step-progress-help')).toHaveText(
+    'Confirm station positions and resolve station issues to continue.',
+  );
+  await expect(page.locator('#step-progress-help')).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await expect(page.locator('.issue[data-code="STATION_UNCONFIRMED"]')).toBeVisible();
   await step(page, 'Stations');
@@ -255,7 +328,11 @@ test('interpolates only an explicitly selected short interior elevation gap', as
   await expect(page.getByRole('radio', { name: /Omit elevation/ })).toHaveCount(0);
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Review/ })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
+  await expect(page.locator('#step-progress-help')).toHaveText(
+    'Resolve the elevation issues before continuing.',
+  );
+  await expect(page.locator('#step-progress-help')).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await step(page, 'Elevation');
   await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
@@ -320,7 +397,7 @@ test('restores an old elevation-omitting draft with source elevation required', 
   await step(page, 'Elevation');
   await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
   const exported = await downloadRoute(page);
   expect(exported.route.elevationInfo.containsFilledValues).toBe(true);
@@ -347,7 +424,7 @@ test('keeps missing endpoint elevation blocked while allowing route previews', a
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toContainText(
     'Missing start or finish elevations',
   );
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await expect(page.getByRole('slider', { name: 'Route progress', exact: true })).toBeVisible();
   await page.getByRole('slider', { name: 'Route progress', exact: true }).fill('300');
@@ -382,11 +459,13 @@ test('requires corrected source data when every elevation is missing', async ({ 
   await expect(page.getByRole('radio', { name: /Use source elevation/ })).toBeChecked();
   await page.getByRole('radio', { name: /Fill gaps and export/ }).check();
   await expect(page.locator('.issue[data-code="INCOMPLETE_ELEVATION"]')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
+  if (await page.getByRole('button', { name: 'Map', exact: true }).isVisible())
+    await page.getByRole('button', { name: 'Map', exact: true }).click();
   await expect(
     page.getByRole('region', { name: 'Interactive route map', exact: true }),
-  ).toBeAttached();
+  ).toBeVisible();
 });
 
 test('keeps KML altitude uncertainty explicit and records accepted provenance', async ({
@@ -402,7 +481,7 @@ test('keeps KML altitude uncertainty explicit and records accepted provenance', 
   await page.getByRole('radio', { name: /Use source elevation/ }).check();
   const acceptance = page.getByRole('checkbox', { name: /I confirm these values/ });
   await expect(acceptance).not.toBeChecked();
-  await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Next:/ })).toBeDisabled();
   await expect(page.getByRole('navigation').getByRole('button', { name: /Export/ })).toBeDisabled();
   await step(page, 'Elevation');
   await acceptance.check();
@@ -439,8 +518,11 @@ for (const extension of ['gpx', 'kml']) {
       if (await page.getByRole('button', { name: 'Profile', exact: true }).isVisible())
         await page.getByRole('button', { name: 'Profile', exact: true }).click();
       await expect(page.getByRole('slider', { name: 'Route progress', exact: true })).toBeVisible();
-      if (await page.getByRole('button', { name: 'Map', exact: true }).isVisible())
-        await page.getByRole('button', { name: 'Map', exact: true }).click();
+    }
+    if (await page.getByRole('button', { name: 'Map', exact: true }).isVisible())
+      await page.getByRole('button', { name: 'Map', exact: true }).click();
+    await expect(page.locator('.map-panel')).toBeVisible();
+    if (isMobile) {
       const mapBounds = await page.locator('.route-map').boundingBox();
       const panelBounds = await page.locator('.map-panel').boundingBox();
       expect(mapBounds!.height).toBeLessThanOrEqual(panelBounds!.height);
@@ -476,7 +558,9 @@ test('switches and remembers the locale without changing route data or export id
   await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
   await expect(page.locator('.panel-heading h2')).toHaveText('导出');
-  await expect(page.getByRole('region', { name: '交互式路线地图' })).toBeAttached();
+  if (await page.getByRole('button', { name: '地图', exact: true }).isVisible())
+    await page.getByRole('button', { name: '地图', exact: true }).click();
+  await expect(page.getByRole('region', { name: '交互式路线地图' })).toBeVisible();
   await expect(page.locator('.title-row')).toHaveCount(0);
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载 .rte', exact: true }).click();

@@ -5,6 +5,7 @@ import {
   canNavigate,
   completedSteps,
   confirmWorkflowRoute,
+  getContinueBlocker,
   navigateWorkflow,
   resetWorkflow,
   workflowAfterEdit,
@@ -243,6 +244,97 @@ describe('workflow navigation', () => {
       });
     } else {
       expect(result).toBe(state);
+    }
+  });
+});
+
+describe('next-step feedback', () => {
+  it.each<{
+    name: string;
+    state: WorkflowState;
+    overrides?: Partial<CompletionInput>;
+    expected: ReturnType<typeof getContinueBlocker>;
+  }>([
+    {
+      name: 'offers the next step when its prerequisites are complete',
+      state: { ...exported, step: 'route' },
+      expected: null,
+    },
+    {
+      name: 'allows leaving import before route processing or confirmation',
+      state: INITIAL_WORKFLOW,
+      overrides: { currentResult: false, hasRoute: false },
+      expected: null,
+    },
+    {
+      name: 'prioritizes an active task over pending processing and confirmation',
+      state: { ...exported, step: 'elevation', confirmedRoute: false },
+      overrides: { busy: true, currentResult: false },
+      expected: 'busy',
+    },
+    {
+      name: 'waits for the current processing result before showing a validation blocker',
+      state: { ...exported, step: 'route', confirmedRoute: false },
+      overrides: { currentResult: false },
+      expected: 'processing',
+    },
+    {
+      name: 'requests route confirmation after undo without moving the current view',
+      state: { ...exported, step: 'preview', confirmedRoute: false, unlockedStep: 1 },
+      expected: 'routeConfirmation',
+    },
+    {
+      name: 'identifies route errors after confirmation',
+      state: { ...exported, step: 'route' },
+      overrides: {
+        issues: [{ code: 'ROUTE_NAME_INVALID', severity: 'error' }],
+        hasRoute: false,
+      },
+      expected: 'route',
+    },
+    {
+      name: 'identifies an earlier station requirement while viewing elevation',
+      state: { ...exported, step: 'elevation', unlockedStep: 2 },
+      overrides: {
+        issues: [{ code: 'STATION_UNCONFIRMED', severity: 'error' }],
+        hasRoute: false,
+      },
+      expected: 'stations',
+    },
+    {
+      name: 'identifies an elevation requirement on the current step',
+      state: { ...exported, step: 'elevation' },
+      overrides: {
+        issues: [{ code: 'INCOMPLETE_ELEVATION', severity: 'error' }],
+        hasRoute: false,
+      },
+      expected: 'elevation',
+    },
+    {
+      name: 'allows opening export while its declination lookup is still pending',
+      state: { ...exported, step: 'preview' },
+      overrides: { declinationLoading: true },
+      expected: null,
+    },
+    {
+      name: 'has no continuation restriction on the final step',
+      state: { ...exported, confirmedRoute: false },
+      overrides: { busy: true, currentResult: false },
+      expected: null,
+    },
+  ])('$name', ({ state, overrides, expected }) => {
+    const completionInput = { ...input, confirmedRoute: state.confirmedRoute, ...overrides };
+    const completion = completedSteps(completionInput);
+    const blocker = getContinueBlocker(
+      state,
+      completion,
+      completionInput.busy,
+      completionInput.currentResult,
+    );
+    expect(blocker).toBe(expected);
+    const next = STEPS[STEPS.indexOf(state.step) + 1];
+    if (next) {
+      expect(blocker === null).toBe(canNavigate(state, next, completion, completionInput.busy));
     }
   });
 });

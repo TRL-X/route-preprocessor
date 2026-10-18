@@ -35,6 +35,7 @@ import {
   canNavigate,
   completedSteps,
   confirmWorkflowRoute,
+  getContinueBlocker,
   navigateWorkflow,
   resetWorkflow,
   workflowAfterEdit,
@@ -131,9 +132,27 @@ export default function App() {
     confirmedRoute,
   });
   const ready = complete.export;
+  const nextStep = STEPS[stepIndex + 1];
+  const continueBlocker = getContinueBlocker(workflow, complete, busy, currentResult);
+  const continueMessages = {
+    busy: 'app.operationInProgress',
+    processing: 'app.waitForProcessing',
+    routeConfirmation:
+      step === 'route' ? 'app.confirmRouteToContinue' : 'app.routeConfirmationRequired',
+    import: 'app.completePreviousStep',
+    route: 'app.resolveRouteIssues',
+    stations: 'app.resolveStationIssues',
+    elevation: 'app.resolveElevationIssues',
+    preview: 'app.resolveExportErrors',
+    export: 'app.resolveExportErrors',
+  } as const;
+  const continueHint = continueBlocker ? t(continueMessages[continueBlocker]) : null;
   const canGo = (next: Step) => canNavigate(workflow, next, complete, busy);
   const go = (next: Step) => {
     if (!canGo(next)) return;
+    if (next !== step && ['route', 'stations', 'elevation'].includes(next)) {
+      setActiveView(next === 'elevation' ? 'profile' : 'map');
+    }
     setWorkflow((previous) => navigateWorkflow(previous, next, complete, busy));
     clearError();
   };
@@ -175,6 +194,7 @@ export default function App() {
   function resetEditorView() {
     setCursorS(0);
     setSelectedStationId(null);
+    setActiveView('map');
     setWorkflow(resetWorkflow());
   }
   async function importFile(file: File) {
@@ -981,19 +1001,6 @@ export default function App() {
                         showView('map');
                       }}
                     />
-                    {step === 'route' && (
-                      <label className="check-field">
-                        <input
-                          type="checkbox"
-                          checked={confirmedRoute}
-                          onChange={(e) => {
-                            const confirmed = e.target.checked;
-                            setWorkflow((previous) => confirmWorkflowRoute(previous, confirmed));
-                          }}
-                        />
-                        <span>{t('app.confirmRouteDirection')}</span>
-                      </label>
-                    )}
                   </fieldset>
                   {step === 'export' && (
                     <BluetoothUpload
@@ -1006,24 +1013,46 @@ export default function App() {
                   )}
                 </div>
                 <div className="panel-footer">
-                  <button
-                    className="button button-ghost"
-                    disabled={!!busy}
-                    onClick={() => go(STEPS[Math.max(0, stepIndex - 1)])}
-                  >
-                    <ArrowLeft size={16} />
-                    {t('app.back')}
-                  </button>
-                  {stepIndex < 5 && (
-                    <button
-                      className="button button-primary"
-                      disabled={!canGo(STEPS[stepIndex + 1])}
-                      onClick={() => go(STEPS[stepIndex + 1])}
-                    >
-                      {t('app.continue')}
-                      <ArrowRight size={16} />
-                    </button>
+                  {step === 'route' && (
+                    <label className="check-field">
+                      <input
+                        type="checkbox"
+                        checked={confirmedRoute}
+                        disabled={!!busy}
+                        onChange={(e) => {
+                          const confirmed = e.target.checked;
+                          setWorkflow((previous) => confirmWorkflowRoute(previous, confirmed));
+                        }}
+                      />
+                      <span>{t('app.confirmRouteDirection')}</span>
+                    </label>
                   )}
+                  {continueHint && (
+                    <p className="panel-footer-status" id="step-progress-help" role="status">
+                      {continueHint}
+                    </p>
+                  )}
+                  <div className="panel-footer-actions">
+                    <button
+                      className="button button-ghost"
+                      disabled={!!busy}
+                      onClick={() => go(STEPS[Math.max(0, stepIndex - 1)])}
+                    >
+                      <ArrowLeft size={16} />
+                      {t('app.back')}
+                    </button>
+                    {nextStep && (
+                      <button
+                        className="button button-primary"
+                        disabled={!canGo(nextStep)}
+                        aria-describedby={continueHint ? 'step-progress-help' : undefined}
+                        onClick={() => go(nextStep)}
+                      >
+                        {t('app.nextStep', { step: t(`steps.${nextStep}.label`) })}
+                        <ArrowRight size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </aside>
               <div

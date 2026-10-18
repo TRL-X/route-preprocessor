@@ -18,6 +18,7 @@ export const INITIAL_WORKFLOW: WorkflowState = {
 };
 
 export type StepCompletion = Record<Step, boolean>;
+export type ContinueBlocker = 'busy' | 'processing' | 'routeConfirmation' | Step;
 
 const routeIssues = new Set([
   'MAGNETIC_DECLINATION_INVALID',
@@ -105,6 +106,22 @@ export function canNavigate(
   if (target <= current) return true;
   if (target > state.unlockedStep && target !== current + 1) return false;
   return STEPS.slice(0, target).every((step) => complete[step]);
+}
+
+/** Explain the next-step restriction using the same prerequisites as navigation. */
+export function getContinueBlocker(
+  state: WorkflowState,
+  complete: StepCompletion,
+  busy: boolean,
+  currentResult: boolean,
+): ContinueBlocker | null {
+  const nextIndex = STEPS.indexOf(state.step) + 1;
+  const next = STEPS[nextIndex];
+  if (!next || canNavigate(state, next, complete, busy)) return null;
+  if (busy) return 'busy';
+  if (!currentResult) return 'processing';
+  if (!state.confirmedRoute) return 'routeConfirmation';
+  return STEPS.slice(0, nextIndex).find((step) => !complete[step]) ?? null;
 }
 
 export function navigateWorkflow(

@@ -19,7 +19,7 @@ test('captures the actual EMY20K route and elevation editor', async ({
   await page
     .getByRole('checkbox', { name: 'I have checked the route and direction on the map.' })
     .check();
-  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await page.getByRole('button', { name: 'Next: Stations', exact: true }).click();
   for (const row of await page.locator('.station-row').all()) {
     await row.click();
     const confirm = page.getByRole('button', { name: 'Confirm station position', exact: true });

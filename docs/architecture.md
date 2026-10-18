@@ -47,7 +47,16 @@ Radix Dialog, Lucide and shared CSS provide the interface controls. Layout rules
 are in `src/app/layout.css`. The editor's fields scroll within the available
 window height while navigation remains accessible. Mobile places the collapsible
 preview above the editor; map and chart stay mounted when their visibility
-changes, preserving the cursor. Rendering and display simplification leave the computational profile and its
+changes, preserving the cursor. Entering Route or Stations selects the map;
+entering Elevation selects the profile. Manual view selection lasts until the
+next editing step, while preview collapse and the linked cursor are preserved.
+Tall preview panes continue to show the map and profile together. Route
+confirmation stays in the fixed editor footer beside continuation feedback and
+navigation. The feedback explains existing workflow restrictions through
+`src/app/flow.ts`; it does not introduce additional completion requirements.
+Short phone layouts reduce repeated headings and spacing to keep the fields and
+fixed footer usable; the preview can still be collapsed for more editing space.
+Rendering and display simplification leave the computational profile and its
 accumulated ascent and descent unchanged.
 
 ## State and processing
