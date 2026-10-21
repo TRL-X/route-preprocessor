@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RouteData } from '../core/types';
 import {
+  createRouteFilename,
   download,
   errorText,
+  hex,
   importRouteFile,
   isCancelled,
   prepareRouteExport,
   rebuildRoute,
+  routeFilename,
   type ExportedRoute,
 } from './route-files';
 import type { EditorSession } from './useEditorSession';
@@ -17,18 +20,32 @@ export function useRouteFiles(
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [filename, setFilename] = useState(createRouteFilename);
   const [exported, setExported] = useState<ExportedRoute | null>(null);
   const operation = useRef<AbortController | null>(null);
+  const routeId = session.editor ? hex(session.editor.routeId) : '';
+
+  useEffect(() => {
+    if (routeId) setFilename(createRouteFilename());
+  }, [routeId]);
 
   useEffect(() => {
     setExported(null);
-  }, [session.editor]);
+  }, [session.editor, filename]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(''), 5000);
     return () => clearTimeout(timer);
   }, [notice]);
   useEffect(() => () => operation.current?.abort(), []);
+
+  let exportFilename = '';
+  let filenameError = '';
+  try {
+    exportFilename = routeFilename(filename);
+  } catch (error) {
+    filenameError = errorText(error);
+  }
 
   async function run<T>(
     label: string,
@@ -81,11 +98,17 @@ export function useRouteFiles(
 
   async function prepareExport(route: RouteData | null, ready: boolean, signal?: AbortSignal) {
     const editor = session.editor;
-    if (!editor || !route || !ready) return;
+    if (!editor || !route || !ready || filenameError) return;
     return run(
       'app.exportingRoute',
       async (signal) => {
-        const output = await prepareRouteExport(editor, route, session.ledger, signal);
+        const output = await prepareRouteExport(
+          editor,
+          route,
+          session.ledger,
+          signal,
+          exportFilename,
+        );
         signal.throwIfAborted();
         await session.saveExport(editor, output.ledger);
         signal.throwIfAborted();
@@ -108,6 +131,10 @@ export function useRouteFiles(
     busy,
     error,
     notice,
+    filename,
+    exportFilename,
+    filenameError,
+    setFilename,
     exported,
     importFile,
     rebuild,

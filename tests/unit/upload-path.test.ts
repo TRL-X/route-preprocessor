@@ -3,9 +3,7 @@ import { DEFAULT_TARGET_DIRECTORY, uploadPath } from '../../src/features/export/
 
 describe('device upload paths', () => {
   it('appends the generated filename to the default or configured directory', () => {
-    expect(uploadPath(DEFAULT_TARGET_DIRECTORY, 'Forest trail.rte')).toBe(
-      '/SD:/routes/Forest trail.rte',
-    );
+    expect(uploadPath(DEFAULT_TARGET_DIRECTORY, 'ABCDEFGH.RTE')).toBe('/SD:/ROUTES/ABCDEFGH.RTE');
     expect(uploadPath(' /lfs/routes ', '山路.rte')).toBe('/lfs/routes/山路.rte');
     expect(uploadPath('/', 'route.rte')).toBe('/route.rte');
   });

@@ -31,13 +31,22 @@ export interface PreparedExport {
   persisted: boolean;
 }
 
+export function createRouteFilename(): string {
+  const letters = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(letters, (value) => String.fromCharCode(65 + (value % 26))).join('') + '.RTE';
+}
+
 export function routeFilename(name: string): string {
-  return (
-    (name
-      .trim()
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-      .slice(0, 80) || 'route') + '.rte'
-  );
+  const stem = name.trim().replace(/\.rte$/i, '');
+  if (
+    !stem ||
+    stem === '.' ||
+    stem === '..' ||
+    /[<>:"/\\|?*\u0000-\u001f\u007f-\u009f]/u.test(name)
+  ) {
+    throw new Error('app.invalidFilename');
+  }
+  return stem + '.RTE';
 }
 
 export async function importRouteFile(file: File, signal: AbortSignal): Promise<Editor> {
@@ -100,7 +109,9 @@ export async function prepareRouteExport(
   route: RouteData,
   ledger: Ledger,
   signal: AbortSignal,
+  name = createRouteFilename(),
 ): Promise<PreparedExport> {
+  const filename = routeFilename(name);
   const encode = async (data: RouteData) => {
     const bytes = await runWorkerTask<Uint8Array>({ type: 'export', route: data }, signal);
     signal.throwIfAborted();
@@ -130,7 +141,6 @@ export async function prepareRouteExport(
       ? canonical
       : await encode({ ...route, routeId: outputId, revision });
   signal.throwIfAborted();
-  const filename = routeFilename(editor.name);
   return {
     bytes,
     exported: { filename, bytes: bytes.length, revision, routeId: hex(outputId) },
