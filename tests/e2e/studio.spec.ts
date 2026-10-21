@@ -163,6 +163,7 @@ test('cannot bypass route confirmation or change steps during a pending export',
 
 test('uses a stable random filename and allows renaming without changing route content or revision', async ({
   page,
+  browserName,
 }) => {
   await importText(page, gpx(complete));
   const first = await downloadRoute(page);
@@ -186,7 +187,13 @@ test('uses a stable random filename and allows renaming without changing route c
     await filename.fill(input);
     await expect(filename).toHaveAttribute('aria-invalid', 'false');
     const renamed = await downloadRoute(page);
-    expect(renamed.filename).toBe(expected);
+    await expect(page.locator('.success-card strong')).toHaveText(expected);
+    // Linux WebKit replaces spaces in its suggested filename after the app starts the download.
+    const suggestedFilename =
+      browserName === 'webkit' && process.platform === 'linux'
+        ? expected.replaceAll(' ', '_')
+        : expected;
+    expect(renamed.filename).toBe(suggestedFilename);
     expect(renamed.bytes).toEqual(first.bytes);
     expect(renamed.route.name).toBe('Forest trail');
     expect(renamed.route.revision).toBe(first.route.revision);
