@@ -33,16 +33,23 @@ npm run preview
    elevation must be corrected in the source file.
 5. Inspect the linked map and elevation profile, stage statistics and processing
    issues. The original profile remains available for comparison.
-6. On Export, use **Download .rte** to encode, validate and download the route, or
-   **Send to device** to open Bluetooth connection and upload controls. File
-   details and a separate processing report show the output metadata, input hash,
-   settings and diagnostics.
+6. On Export, set the filename, then use **Download .rte** to encode, validate and
+   download the route, or **Send to device** to open Bluetooth connection and
+   upload controls. File details and a separate processing report show the output
+   metadata, input hash, settings and diagnostics.
 
 The editor preserves parsed source data, supports undo and saves a local draft in
 IndexedDB. Background processing can be cancelled. Re-exporting the latest content
 reuses its bytes and revision; changed content receives a new revision. IndexedDB
 transactions coordinate revisions across tabs. If storage is unavailable, each
 export receives a new route identity and revision 1, with a notice in the editor.
+
+Downloads and device uploads share the editable filename on Export. Its default
+is eight random uppercase ASCII letters followed by `.RTE`, such as `ABCDEFGH.RTE`.
+The name stays stable while editing the current route in this session, including
+repeated exports and retries. Enter a name with or without the suffix; export
+normalizes the suffix to `.RTE`. Changing the filename leaves the route's name,
+encoded bytes and revision unchanged.
 
 Files are parsed, edited and exported locally. Automatic magnetic declination
 lookup sends the route midpoint and selected date to the BGS WMM2025 service. A
@@ -60,9 +67,10 @@ On the Export step, use **Send to device** to expand the upload controls, then
 and choose **Upload route**. **Download .rte** remains available above the upload
 controls. The validated RTE bytes go
 directly from the browser to the device; no server or nRF app is needed. The
-target directory defaults to `/SD:/routes/` and is saved in this browser. The
-generated `.rte` filename is appended to that directory. Create the directory on
-the device first; uploading overwrites an existing file of the same name.
+target directory defaults to `/SD:/ROUTES/` and is saved in this browser. Existing
+saved directories are retained. The chosen `.RTE` filename is appended to that
+directory. Create the directory on the device first; uploading overwrites an
+existing file of the same name.
 
 Use Chrome on Windows, macOS, ChromeOS or Android, over HTTPS (or localhost for
 development). Browser access requires selecting the device in a permission

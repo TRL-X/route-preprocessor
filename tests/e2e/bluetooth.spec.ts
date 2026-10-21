@@ -251,7 +251,10 @@ test('preserves the device connection and directory across toggles and downloads
   await send.click();
   const upload = page.getByRole('region', { name: 'Bluetooth upload', exact: true });
   const directory = upload.getByRole('textbox', { name: 'Target directory', exact: true });
-  await expect(directory).toHaveValue('/SD:/routes/');
+  await expect(directory).toHaveValue('/SD:/ROUTES/');
+  const filename = page.getByRole('textbox', { name: 'File name', exact: true });
+  await expect(filename).toHaveValue(/^[A-Z]{8}\.RTE$/);
+  await expect(upload).toContainText(`/SD:/ROUTES/${await filename.inputValue()}`);
   await expect(upload.getByRole('button', { name: 'Upload route', exact: true })).toBeDisabled();
   await directory.fill('/SD:/custom-routes/');
   await expect(
@@ -269,9 +272,18 @@ test('preserves the device connection and directory across toggles and downloads
 
   await upload.getByRole('button', { name: 'Connect device', exact: true }).click();
   await expect(upload).toContainText('Connected to Route test device');
+  for (const invalid of ['', '../escape']) {
+    await filename.fill(invalid);
+    await expect(filename).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
+    await expect(upload.getByRole('button', { name: 'Upload route', exact: true })).toBeDisabled();
+  }
+  await filename.fill('Evening trail.rte');
+  await expect(upload).toContainText('/SD:/custom-routes/Evening trail.RTE');
   const downloading = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download .rte', exact: true }).click();
   const download = await downloading;
+  expect(download.suggestedFilename()).toBe('Evening trail.RTE');
   const bytes = new Uint8Array(await readFile((await download.path())!));
   expect(decodeRte(bytes).name).toBe('Bluetooth forest trail');
   await expect(send).toHaveAttribute('aria-expanded', 'true');
@@ -333,6 +345,7 @@ test('cancels while preparing the RTE without sending Bluetooth data or leaving 
   await upload.getByRole('button', { name: 'Connect device', exact: true }).click();
   await upload.getByRole('button', { name: 'Upload route', exact: true }).click();
   await expect(upload).toContainText('Generating and validating the RTE file');
+  await expect(page.getByRole('textbox', { name: 'File name', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
   await expect(send).toBeDisabled();
   await expect(upload.getByRole('button', { name: 'Cancel upload', exact: true })).toBeEnabled();
@@ -343,6 +356,7 @@ test('cancels while preparing the RTE without sending Bluetooth data or leaving 
   await expect(send).toBeEnabled();
   await expect(send).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeEnabled();
+  await expect(page.getByRole('textbox', { name: 'File name', exact: true })).toBeEnabled();
   await expect
     .poll(() =>
       page.evaluate(

@@ -1,6 +1,13 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { hex, importRouteFile, prepareRouteExport, rebuildRoute } from '../../src/app/route-files';
+import {
+  createRouteFilename,
+  hex,
+  importRouteFile,
+  prepareRouteExport,
+  rebuildRoute,
+  routeFilename,
+} from '../../src/app/route-files';
 import { reserveExportRevision, RevisionExhaustedError } from '../../src/app/drafts';
 import type { Editor } from '../../src/app/editor';
 import { runWorkerTask } from '../../src/app/worker-client';
@@ -74,6 +81,51 @@ afterEach(() => {
 });
 
 describe('route file operations', () => {
+  it('creates an eight-letter uppercase default filename from random bytes', () => {
+    const random = vi.spyOn(crypto, 'getRandomValues').mockImplementation((array) => {
+      (array as Uint8Array).set([0, 1, 2, 25, 26, 27, 254, 255]);
+      return array;
+    });
+    expect(createRouteFilename()).toBe('ABCZABUV.RTE');
+    expect(random).toHaveBeenCalledWith(expect.any(Uint8Array));
+    random.mockRestore();
+    expect(createRouteFilename()).toMatch(/^[A-Z]{8}\.RTE$/);
+  });
+
+  it.each([
+    ['Forest trail', 'Forest trail.RTE'],
+    ['  山路.rte  ', '山路.RTE'],
+    ['my-route.RtE', 'my-route.RTE'],
+    ['ABCDEFGH.RTE', 'ABCDEFGH.RTE'],
+    ['a'.repeat(100), 'a'.repeat(100) + '.RTE'],
+  ])('normalizes the custom filename %j to %j', (name, expected) => {
+    expect(routeFilename(name)).toBe(expected);
+  });
+
+  it.each([
+    '',
+    '   ',
+    '.rte',
+    '.',
+    '..',
+    '../forest',
+    'a/b',
+    'a\\b',
+    'a:b',
+    'a<b',
+    'a>b',
+    'a"b',
+    'a|b',
+    'a?b',
+    'a*b',
+    'a\u0000b',
+    'a\nb',
+    'a\u007fb',
+    'a\u0085b',
+  ])('rejects the invalid custom filename %j', (name) => {
+    expect(() => routeFilename(name)).toThrow('app.invalidFilename');
+  });
+
   it.each<{
     name: string;
     elevations: (number | null)[];
@@ -191,7 +243,7 @@ describe('route file operations', () => {
     const signal = new AbortController().signal;
     const first = await prepareRouteExport(editor, route, {}, signal);
     expect(first.exported).toMatchObject({
-      filename: 'Forest trail.rte',
+      filename: expect.stringMatching(/^[A-Z]{8}\.RTE$/),
       revision: 1,
       routeId: hex(editor.routeId),
     });
@@ -208,6 +260,28 @@ describe('route file operations', () => {
       revision: 2,
       routeId: editor.routeId,
     });
+  });
+
+  it('uses custom filenames without changing route metadata, bytes or revisions', async () => {
+    const { editor, route } = fixture();
+    const signal = new AbortController().signal;
+    const first = await prepareRouteExport(editor, route, {}, signal, 'Morning trail.rte');
+    const renamed = await prepareRouteExport(editor, route, first.ledger, signal, '山路');
+    expect(first.exported.filename).toBe('Morning trail.RTE');
+    expect(renamed.exported.filename).toBe('山路.RTE');
+    expect(renamed.bytes).toEqual(first.bytes);
+    expect(renamed.exported.revision).toBe(first.exported.revision);
+    expect(renamed.exported.routeId).toBe(first.exported.routeId);
+    expect(decodeRte(renamed.bytes).name).toBe(editor.name);
+  });
+
+  it('rejects invalid filenames before encoding or reserving a revision', async () => {
+    const { editor, route } = fixture();
+    await expect(
+      prepareRouteExport(editor, route, {}, new AbortController().signal, '../forest'),
+    ).rejects.toThrow('app.invalidFilename');
+    expect(runWorkerTask).not.toHaveBeenCalled();
+    expect(await reserveExportRevision(hex(editor.routeId), 'next-export')).toBe(1);
   });
 
   it('reserves revisions above the restored draft ledger', async () => {

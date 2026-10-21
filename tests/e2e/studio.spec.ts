@@ -59,11 +59,11 @@ async function downloadRoute(page: Page) {
   const downloadPromise = page.waitForEvent('download');
   await downloadButton.click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toMatch(/\.rte$/);
+  expect(download.suggestedFilename()).toMatch(/\.RTE$/);
   const downloadedPath = await download.path();
   expect(downloadedPath).not.toBeNull();
   const bytes = new Uint8Array(await readFile(downloadedPath!));
-  return { bytes, route: decodeRte(bytes) };
+  return { bytes, route: decodeRte(bytes), filename: download.suggestedFilename() };
 }
 async function noOverflow(page: Page) {
   const dimensions = await page.evaluate(() => ({
@@ -150,6 +150,7 @@ test('cannot bypass route confirmation or change steps during a pending export',
     await expect(button).toBeDisabled();
   await expect(page.locator('.panel-fields')).toHaveAttribute('disabled', '');
   await expect(page.getByRole('button', { name: 'Download .rte', exact: true })).toBeDisabled();
+  await expect(page.getByRole('textbox', { name: 'File name', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Send to device', exact: true })).toBeDisabled();
   await expect(
     page.getByRole('button', { name: 'Download processing report', exact: true }),
@@ -158,6 +159,44 @@ test('cannot bypass route confirmation or change steps during a pending export',
   const file = await download;
   expect(decodeRte(new Uint8Array(await readFile((await file.path())!))).name).toBe('Forest trail');
   await expect(navigation.getByRole('button', { name: /Route/ })).toBeEnabled();
+});
+
+test('uses a stable random filename and allows renaming without changing route content or revision', async ({
+  page,
+}) => {
+  await importText(page, gpx(complete));
+  const first = await downloadRoute(page);
+  expect(first.filename).toMatch(/^[A-Z]{8}\.RTE$/);
+  const filename = page.getByRole('textbox', { name: 'File name', exact: true });
+  const download = page.getByRole('button', { name: 'Download .rte', exact: true });
+  await expect(filename).toHaveValue(first.filename);
+  await step(page, 'Review');
+  await step(page, 'Export');
+  await expect(filename).toHaveValue(first.filename);
+
+  for (const invalid of ['', '../escape', 'bad\\path']) {
+    await filename.fill(invalid);
+    await expect(filename).toHaveAttribute('aria-invalid', 'true');
+    await expect(download).toBeDisabled();
+  }
+  for (const [input, expected] of [
+    ['Mountain trip', 'Mountain trip.RTE'],
+    ['山路.rte', '山路.RTE'],
+  ]) {
+    await filename.fill(input);
+    await expect(filename).toHaveAttribute('aria-invalid', 'false');
+    const renamed = await downloadRoute(page);
+    expect(renamed.filename).toBe(expected);
+    expect(renamed.bytes).toEqual(first.bytes);
+    expect(renamed.route.name).toBe('Forest trail');
+    expect(renamed.route.revision).toBe(first.route.revision);
+  }
+  await noOverflow(page);
+
+  await importText(page, gpx(complete), 'another-route.gpx');
+  const next = await downloadRoute(page);
+  expect(next.filename).toMatch(/^[A-Z]{8}\.RTE$/);
+  expect(next.filename).not.toBe(first.filename);
 });
 
 test('keeps the next action visible and follows each editing step with the relevant preview', async ({
@@ -1015,13 +1054,18 @@ test('switches and remembers the locale without changing route data or export id
   await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
   await expect(page.locator('.panel-heading h2')).toHaveText('导出');
+  await expect(page.getByRole('textbox', { name: '文件名', exact: true })).toHaveValue(
+    first.filename,
+  );
   if (await page.getByRole('button', { name: '地图', exact: true }).isVisible())
     await page.getByRole('button', { name: '地图', exact: true }).click();
   await expect(page.getByRole('region', { name: '交互式路线地图' })).toBeVisible();
   await expect(page.locator('.title-row')).toHaveCount(0);
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载 .rte', exact: true }).click();
-  const downloadedPath = await (await downloadPromise).path();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe(first.filename);
+  const downloadedPath = await download.path();
   expect(new Uint8Array(await readFile(downloadedPath!))).toEqual(first.bytes);
   await page.reload();
   await expect(page.getByRole('combobox', { name: '语言', exact: true })).toHaveValue('zh');

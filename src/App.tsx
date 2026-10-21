@@ -43,7 +43,7 @@ import {
   type Step,
 } from './app/flow';
 import type { Editor } from './app/editor';
-import { downloadQualityReport, routeFilename } from './app/route-files';
+import { downloadQualityReport } from './app/route-files';
 import { useEditorSession } from './app/useEditorSession';
 import { useRouteFiles } from './app/useRouteFiles';
 import { useRouteProcessing } from './app/useRouteProcessing';
@@ -1029,6 +1029,24 @@ export default function App() {
                             <ArrowRight size={15} />
                           </button>
                         )}
+                        <label className="field">
+                          <span>{t('app.exportFilename')}</span>
+                          <input
+                            aria-label={t('app.exportFilename')}
+                            value={files.filename}
+                            spellCheck={false}
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            onChange={(event) => files.setFilename(event.target.value)}
+                            aria-describedby="export-filename-help"
+                            aria-invalid={!!files.filenameError}
+                          />
+                          <small id="export-filename-help">
+                            {files.filenameError
+                              ? uiText(files.filenameError)
+                              : t('app.exportFilenameHelp')}
+                          </small>
+                        </label>
                         <div
                           className="export-actions"
                           role="group"
@@ -1036,7 +1054,7 @@ export default function App() {
                         >
                           <button
                             className="button button-primary full-width export-button"
-                            disabled={!ready}
+                            disabled={!ready || !!files.filenameError}
                             onClick={() => void exportRoute()}
                           >
                             <ArrowDownToLine size={18} />
@@ -1080,9 +1098,9 @@ export default function App() {
                     <>
                       <div id="export-device-panel" hidden={!devicePanelOpen}>
                         <BluetoothUpload
-                          ready={!!ready}
+                          ready={!!ready && !files.filenameError}
                           disabled={!!files.busy}
-                          filename={routeFilename(editor.name)}
+                          filename={files.exportFilename}
                           prepareExport={(signal) => files.prepareExport(route, !!ready, signal)}
                           onBusyChange={setDeviceBusy}
                         />

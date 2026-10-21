@@ -67,10 +67,14 @@ export default function BluetoothUpload({
     }
   }, [directory]);
 
+  useEffect(() => {
+    setUploadedPath('');
+  }, [filename]);
+
   let path = '';
   let pathError = '';
   try {
-    path = uploadPath(directory, filename);
+    if (filename) path = uploadPath(directory, filename);
   } catch (error) {
     pathError = (error as Error).message;
   }
@@ -200,7 +204,7 @@ export default function BluetoothUpload({
               aria-invalid={!!pathError}
             />
             <small id="bluetooth-target-help">
-              {pathError ? uiText(pathError) : t('bluetooth.targetPath', { path })}
+              {pathError ? uiText(pathError) : path ? t('bluetooth.targetPath', { path }) : null}
             </small>
           </label>
           <p className="small muted">{t('bluetooth.overwriteHelp')}</p>
@@ -224,7 +228,7 @@ export default function BluetoothUpload({
           <button
             className="button button-primary full-width"
             onClick={() => void upload()}
-            disabled={!ready || !deviceName || uploading || disabled || !!pathError}
+            disabled={!ready || !deviceName || uploading || disabled || !path}
           >
             <Upload size={16} />
             {t('bluetooth.upload')}

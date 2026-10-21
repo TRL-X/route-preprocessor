@@ -1,6 +1,6 @@
 import { validateUploadPath } from '../../device/bluetooth';
 
-export const DEFAULT_TARGET_DIRECTORY = '/SD:/routes/';
+export const DEFAULT_TARGET_DIRECTORY = '/SD:/ROUTES/';
 export const TARGET_DIRECTORY_STORAGE_KEY = 'trl-x.bluetooth-target-directory';
 
 export function uploadPath(directory: string, filename: string): string {
