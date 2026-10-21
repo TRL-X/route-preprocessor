@@ -11,8 +11,8 @@ layouts share the same editing model and processing rules.
 | `src/App.tsx`                                  | UI coordination, view state and rendering                                           |
 | `src/app/useEditorSession.ts`                  | Editor state, undo, draft loading and saving                                        |
 | `src/app/useRouteProcessing.ts`                | Debounced processing and automatic declination                                      |
-| `src/app/useRouteFiles.ts`                     | File operation status, cancellation and export feedback                             |
-| `src/app/route-files.ts`                       | Import, rebuild, revision allocation, encoding and downloads                        |
+| `src/app/useRouteFiles.ts`                     | File operation status, output filename, cancellation and export feedback            |
+| `src/app/route-files.ts`                       | Import, rebuild, filename validation, revision allocation, encoding and downloads   |
 | `src/app/editor.ts`                            | Editor, revision ledger and versioned draft types                                   |
 | `src/app/draft-schema.ts`                      | Draft validation and supported migrations                                           |
 | `src/app/flow.ts`                              | Wizard completion, navigation, confirmation invalidation and issue ownership        |
@@ -94,6 +94,15 @@ connection and feedback. Both actions are disabled during export or transfer,
 while upload cancellation remains outside the disabled editor fieldset. File
 details and the processing report remain visible below the controls. Export
 validation and revision allocation follow the existing rules.
+
+The editable export filename is shared by downloads and device uploads.
+`useRouteFiles` retains it for the current route session, across route edits,
+navigation, repeated exports and retries. A new route starts with eight random
+uppercase ASCII letters and a `.RTE` suffix. `route-files` validates the chosen
+name and normalizes its optional suffix to `.RTE` before preparing the export.
+The filename is separate from route metadata and does not participate in content
+hashing or revision allocation. The device directory defaults to `/SD:/ROUTES/`;
+existing saved directory preferences retain their exact casing.
 
 ## State and processing
 
