@@ -63,7 +63,23 @@ async function downloadRoute(page: Page) {
   const downloadedPath = await download.path();
   expect(downloadedPath).not.toBeNull();
   const bytes = new Uint8Array(await readFile(downloadedPath!));
-  return { bytes, route: decodeRte(bytes), filename: download.suggestedFilename() };
+  const route = decodeRte(bytes);
+  const boundaries = route.stations.filter((station) => station.stageBoundary);
+  expect(route.stages).toHaveLength(boundaries.length - 1);
+  route.stages.forEach((stage, index) => {
+    const from = boundaries[index];
+    const to = boundaries[index + 1];
+    const heights = route.elev
+      .filter((node) => node.sDm >= from.sDm && node.sDm <= to.sDm)
+      .map((node) => node.hDm);
+    expect(stage).toEqual({
+      fromEventId: from.eventId,
+      toEventId: to.eventId,
+      minHDm: Math.min(...heights),
+      maxHDm: Math.max(...heights),
+    });
+  });
+  return { bytes, route, filename: download.suggestedFilename() };
 }
 async function noOverflow(page: Page) {
   const dimensions = await page.evaluate(() => ({

@@ -120,7 +120,7 @@ export interface RouteData {
   elevationInfo: ElevationInfo;
   magneticDeclination?: MagneticDeclinationInfo;
   stations: StationEvent[];
-  stages?: Stage[];
+  stages: Stage[];
 }
 export interface ProcessingOptions {
   geometryToleranceM: number;

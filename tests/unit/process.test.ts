@@ -359,7 +359,11 @@ describe('preprocessing, profile sampling, and quantization', () => {
     const reference = buildReference(
       source([point(0, 0, 10), point(0, 0.001, 20), point(0, 0.002, -5)]),
     );
-    const stations = createStations(reference, [{ id: 'cp', name: 'CP1', lat: 0, lon: 0.001 }]);
+    const stations = createStations(reference, [
+      { id: 'cp', name: 'CP1', lat: 0, lon: 0.001 },
+      { id: 'poi', name: 'Viewpoint', lat: 0, lon: 0.0005 },
+    ]);
+    stations.find((station) => station.name === 'Viewpoint')!.stageBoundary = false;
     const result = processRoute(
       reference,
       stations,
@@ -368,7 +372,11 @@ describe('preprocessing, profile sampling, and quantization', () => {
     );
     expect(result.route).not.toBeNull();
     const route = result.route!;
-    for (const station of route.stations.filter((value) => value.stageBoundary)) {
+    const boundaries = route.stations.filter((value) => value.stageBoundary);
+    expect(boundaries).toHaveLength(3);
+    expect(route.stations).toHaveLength(4);
+    expect(route.stages).toHaveLength(boundaries.length - 1);
+    for (const station of boundaries) {
       expect(route.geom.some((node) => node.sDm === station.sDm)).toBe(true);
       expect(route.elev.some((node) => node.sDm === station.sDm)).toBe(true);
     }
@@ -378,16 +386,18 @@ describe('preprocessing, profile sampling, and quantization', () => {
       expect(node.upDm).toBe(previous.upDm + Math.max(0, node.hDm - previous.hDm));
       expect(node.downDm).toBe(previous.downDm + Math.max(0, previous.hDm - node.hDm));
     }
-    route.stages!.forEach((stage, index) => {
-      const from = route.stations[index].sDm;
-      const to = route.stations[index + 1].sDm;
+    route.stages.forEach((stage, index) => {
+      const from = boundaries[index].sDm;
+      const to = boundaries[index + 1].sDm;
+      expect(stage.fromEventId).toBe(boundaries[index].eventId);
+      expect(stage.toEventId).toBe(boundaries[index + 1].eventId);
       const heights = route.elev
         .filter((node) => node.sDm >= from && node.sDm <= to)
         .map((node) => node.hDm);
       expect(stage.minHDm).toBe(Math.min(...heights));
       expect(stage.maxHDm).toBe(Math.max(...heights));
     });
-    expect(decodeRte(encodeRte(route)).elev).toEqual(route.elev);
+    expect(decodeRte(encodeRte(route))).toEqual(route);
   });
 
   it('applies smoothing to the calculation profile before quantized cumulative totals', () => {

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { CBOR_LIMITS, decodeCbor, encodeCbor } from '../../src/core/cbor';
 import type { CborValue } from '../../src/core/cbor';
@@ -17,11 +18,8 @@ import {
 import type { RouteData } from '../../src/core/types';
 
 // Pinned upstream Appendix B bytes; see tests/fixtures/specification/README.md.
-const vectors = ['a', 'b', 'c'].map((name) => {
-  const dump = readFileSync(
-    new URL(`../fixtures/specification/vector-${name}.hex`, import.meta.url),
-    'utf8',
-  );
+function loadVector(path: string): Uint8Array {
+  const dump = readFileSync(new URL(`../fixtures/specification/${path}`, import.meta.url), 'utf8');
   return Uint8Array.from(
     dump
       .trimEnd()
@@ -33,7 +31,8 @@ const vectors = ['a', 'b', 'c'].map((name) => {
           .map((byte) => Number.parseInt(byte, 16)),
       ),
   );
-});
+}
+const vectors = ['a', 'b', 'c'].map((name) => loadVector(`vector-${name}.hex`));
 const [a, b, c] = vectors;
 
 function view(bytes: Uint8Array) {
@@ -139,18 +138,24 @@ function expectError(fn: () => unknown, code: RteError['code'] = 'invalid') {
 describe('normative reference vectors and CRC32', () => {
   it('loads all three complete pinned upstream reference fixtures', () => {
     expect(vectors).toHaveLength(3);
-    expect(c.length).toBe(404);
-    expect(view(c).getUint32(44, true)).toBe(0xbb625a01);
+    expect(c.length).toBe(432);
+    expect(view(c).getUint32(44, true)).toBe(0xad71ed27);
     expect(a.length).toBe(492);
-    expect(b.length).toBe(464);
+    expect(b.length).toBe(492);
     expect(view(a).getUint32(44, true)).toBe(0x9f58f1aa);
-    expect(view(b).getUint32(44, true)).toBe(0x73cfbd2c);
+    expect(view(b).getUint32(44, true)).toBe(0x8861c349);
+    expect(vectors.map((bytes) => createHash('sha256').update(bytes).digest('hex'))).toEqual([
+      '1eb37069ffd714b38fd8d6f3b2b2778b6ab09b4c05b800b9029d40c3bb06056b',
+      'a47447193984ecc17e03d003a65d48a670435318d329d2ef12aa3fc6a15279d7',
+      '4bd9ae982090760817d2358296032093c80cae0acd1649d941772ddd08338dfd',
+    ]);
   });
   it('matches the standard empty and 123456789 check values', () => {
     expect(crc32(new Uint8Array())).toBe(0);
     expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xcbf43926);
     expect(crc32(a, true)).toBe(0x9f58f1aa);
-    expect(crc32(b, true)).toBe(0x73cfbd2c);
+    expect(crc32(b, true)).toBe(0x8861c349);
+    expect(crc32(c, true)).toBe(0xad71ed27);
   });
   it.each([
     ['A', 0],
@@ -160,9 +165,13 @@ describe('normative reference vectors and CRC32', () => {
     const route = decodeRte(vectors[index]);
     expect(route.name).toBe('Test');
     expect(route.totalSDm).toBe(20000);
-    expect(route.revision).toBe(index + 8);
+    expect(route.revision).toBe([8, 12, 13][index]);
     expect(route.routeId).toEqual(Uint8Array.from({ length: 16 }, (_, i) => i + 1));
     expect(route.stations.map((station) => station.name)).toEqual(['Start', 'CP1', 'Finish']);
+    expect(route.stages).toEqual([
+      { fromEventId: 1, toEventId: 2, minHDm: 900, maxHDm: 1200 },
+      { fromEventId: 2, toEventId: 3, minHDm: 900, maxHDm: 1400 },
+    ]);
     expect(encodeRte(route)).toEqual(vectors[index]);
   });
   it('supports a Uint8Array with a nonzero byte offset without reading neighboring bytes', () => {
@@ -634,33 +643,51 @@ describe('metadata and cross-section relationships', () => {
       },
     ],
     [
-      'partial stage cache',
+      'missing stage summaries',
       (r: RouteData) => {
-        r.stages!.pop();
+        Reflect.deleteProperty(r, 'stages');
+      },
+    ],
+    [
+      'undefined stage summaries',
+      (r: RouteData) => {
+        Reflect.set(r, 'stages', undefined);
+      },
+    ],
+    [
+      'empty stage summaries',
+      (r: RouteData) => {
+        r.stages = [];
+      },
+    ],
+    [
+      'partial stage summaries',
+      (r: RouteData) => {
+        r.stages.pop();
       },
     ],
     [
       'incorrect stage pair',
       (r: RouteData) => {
-        r.stages![0].toEventId = 3;
+        r.stages[0].toEventId = 3;
       },
     ],
     [
       'incorrect stage minimum',
       (r: RouteData) => {
-        r.stages![0].minHDm = 901;
+        r.stages[0].minHDm = 901;
       },
     ],
     [
       'missing stage maximum',
       (r: RouteData) => {
-        Reflect.deleteProperty(r.stages![0], 'maxHDm');
+        Reflect.deleteProperty(r.stages[0], 'maxHDm');
       },
     ],
     [
       'missing stage minimum',
       (r: RouteData) => {
-        Reflect.deleteProperty(r.stages![0], 'minHDm');
+        Reflect.deleteProperty(r.stages[0], 'minHDm');
       },
     ],
     [
@@ -675,16 +702,10 @@ describe('metadata and cross-section relationships', () => {
     change(route);
     expectError(() => encodeRte(route));
   });
-  it('accepts an omitted stage cache while still requiring the complete elevation profile', () => {
-    const route = decodeRte(b);
-    expect(route.stages).toBeUndefined();
-    expect(route.elev).toHaveLength(4);
-    expect(decodeRte(encodeRte(route))).toEqual(route);
-  });
   it('accepts valid zero and negative elevations', () => {
     const route = decodeRte(a);
     for (const node of route.elev) node.hDm -= 1200;
-    for (const stage of route.stages!) {
+    for (const stage of route.stages) {
       stage.minHDm -= 1200;
       stage.maxHDm -= 1200;
     }
@@ -700,7 +721,7 @@ describe('metadata and cross-section relationships', () => {
     expectError(() => encodeRte(route));
   });
   it('rejects metadata type violations and missing required fields after a fresh CRC', () => {
-    for (const key of [0, 1, 2, 3, 4, 5, 7])
+    for (const key of [0, 1, 2, 3, 4, 5, 7, 8])
       expectError(() => decodeRte(alterMeta((meta) => meta.delete(key))));
     expectError(() => decodeRte(alterMeta((meta) => meta.set(2, '20000'))));
     expectError(() => decodeRte(alterMeta((meta) => meta.set(7, []))));
@@ -721,6 +742,59 @@ describe('metadata and cross-section relationships', () => {
         }),
       ),
     );
+  });
+});
+
+describe('required stage summaries', () => {
+  it.each([
+    ['b', 464, 9, 0x73cfbd2c, '956eda7c0a704f0b0651632a02ff6cce754920758b7d201c92196875a29e6478'],
+    ['c', 404, 10, 0xbb625a01, '2362b1a26f6d82bd399c5e0436544642f3cd1db941332842cd2843b5e10abf5d'],
+  ] as const)(
+    'rejects the unchanged legacy vector %s without summaries',
+    (name, size, revision, crc, sha256) => {
+      const bytes = loadVector(`legacy/2026-10-17-vector-${name}.hex`);
+      expect(bytes.length).toBe(size);
+      expect(view(bytes).getUint32(40, true)).toBe(revision);
+      expect(view(bytes).getUint32(44, true)).toBe(crc);
+      expect(crc32(bytes, true)).toBe(crc);
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(sha256);
+      expect(() => decodeRte(bytes)).toThrow(
+        expect.objectContaining({
+          code: 'invalid',
+          message: 'Stages must contain 1..4095 entries.',
+        }),
+      );
+    },
+  );
+
+  it.each([null, false, 1, 'stages', new Map(), [], Array(4096).fill(null)] as CborValue[])(
+    'rejects malformed summary arrays after CRC recomputation (%#)',
+    (value) => {
+      expectError(() => decodeRte(alterMeta((meta) => meta.set(8, value))));
+    },
+  );
+
+  it.each([
+    ['partial summaries', (stages: Map<number, CborValue>[]) => stages.pop()],
+    ['extra summaries', (stages: Map<number, CborValue>[]) => stages.push(stages[0])],
+    ['reversed summaries', (stages: Map<number, CborValue>[]) => stages.reverse()],
+    ['incorrect from event', (stages: Map<number, CborValue>[]) => stages[0].set(0, 2)],
+    ['incorrect to event', (stages: Map<number, CborValue>[]) => stages[0].set(1, 3)],
+    ['missing minimum', (stages: Map<number, CborValue>[]) => stages[0].delete(2)],
+    ['missing maximum', (stages: Map<number, CborValue>[]) => stages[0].delete(3)],
+    ['incorrect minimum', (stages: Map<number, CborValue>[]) => stages[0].set(2, 901)],
+    ['incorrect maximum', (stages: Map<number, CborValue>[]) => stages[0].set(3, 1199)],
+  ] as const)('rejects %s after CRC recomputation', (_, change) => {
+    expectError(() =>
+      decodeRte(alterMeta((meta) => change(meta.get(8) as Map<number, CborValue>[]))),
+    );
+  });
+
+  it('accepts exactly one summary when only the endpoints are stage boundaries', () => {
+    const route = decodeRte(a);
+    route.stations[1].stageBoundary = false;
+    route.stages = [{ fromEventId: 1, toEventId: 3, minHDm: 900, maxHDm: 1400 }];
+    expect(decodeRte(encodeRte(route))).toEqual(route);
   });
 });
 
@@ -766,6 +840,7 @@ describe('geometry index', () => {
       { sDm: 25700, hDm: 0, upDm: 0, downDm: 0 },
     ];
     route.stations = [route.stations[0], { ...route.stations[2], sDm: 25700 }];
+    route.stages = [{ fromEventId: 1, toEventId: 3, minHDm: 0, maxHDm: 0 }];
     const encoded = encodeRte(route);
     expect(decodeRte(encoded).geom).toHaveLength(258);
     const index = sections(encoded).find((entry) => entry.type === 'GIDX')!;
