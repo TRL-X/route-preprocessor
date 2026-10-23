@@ -169,7 +169,7 @@ by its actual length, so endpoint heights may change. Core accepts windows up to
 can change ascent and descent totals. Their settings remain in the local editor
 and quality report. Display thinning must not replace this calculation profile.
 
-A complete `stages` cache is generated between each pair of stage boundaries.
+A required `stages` summary array is generated between each pair of stage boundaries.
 `minHDm` and `maxHDm` are the exact extrema of final ELEV nodes in the inclusive
 stage interval.
 

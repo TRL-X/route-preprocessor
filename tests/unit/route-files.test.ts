@@ -247,6 +247,9 @@ describe('route file operations', () => {
       revision: 1,
       routeId: hex(editor.routeId),
     });
+    expect(decodeRte(first.bytes).stages).toEqual([
+      { fromEventId: 1, toEventId: 2, minHDm: 1000, maxHDm: 1200 },
+    ]);
     const repeated = await prepareRouteExport(editor, route, first.ledger, signal);
     expect(repeated.bytes).toEqual(first.bytes);
     const changed = await prepareRouteExport(

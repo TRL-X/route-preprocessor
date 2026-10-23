@@ -104,7 +104,7 @@ Run `npm run format` to apply the shared Prettier configuration. CI checks forma
 source route files and reference vectors are excluded to preserve their original bytes.
 
 Unit tests cover the specification's A/B/C vectors, malformed files, quantization,
-cross-section relationships, preprocessing, elevation statistics and revision
+required stage summaries, cross-section relationships, preprocessing, elevation statistics and revision
 allocation. Playwright covers desktop Chromium, a phone-sized Chromium viewport
 and WebKit, including validation of downloaded files. These browser profiles do
 not replace testing on physical devices. GitHub Actions runs formatting, lint,

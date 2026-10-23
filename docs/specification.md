@@ -5,8 +5,8 @@ The binary format, META CDDL and reference vectors are maintained in
 This repository does not keep a separate copy of the normative specification.
 
 The implementation targets the
-[2026-10-17 initial edition](https://github.com/TRL-X/route-specification/blob/50f585dd92b02cb0bb0de4b4a0be83695f296200/specification.md),
-commit `50f585dd92b02cb0bb0de4b4a0be83695f296200`, with file format version 1.0 and
+[2026-10-23 initial edition](https://github.com/TRL-X/route-specification/blob/f4e4e3d365e7f44e10bcb6b86365a9f2257b65d6/specification.md),
+commit `f4e4e3d365e7f44e10bcb6b86365a9f2257b65d6`, with file format version 1.0 and
 META schema 1. The upstream document is marked Draft.
 
 ## Implementation requirements
@@ -17,8 +17,9 @@ META schema 1. The upstream document is marked Draft.
   reader.
 - Processing settings and input SHA-256 belong to the local editor and report,
   rather than RTE metadata.
-- A stage cache may be omitted. If present, it includes every stage and its exact
-  minimum and maximum elevation.
+- Stage summaries at core META key 8 are required. The array contains exactly one
+  summary for every consecutive pair of stage-boundary events, in route order,
+  with the exact minimum and maximum ELEV height over each inclusive interval.
 - Declination queries distinguish an unspecified interval, a date inside or outside
   the interval, and an unknown query date. A reference date cannot stand in for a
   missing query date.
@@ -27,6 +28,22 @@ META schema 1. The upstream document is marked Draft.
 
 The application imports GPX/KML, not RTE files. Inputs without a complete usable
 profile must be corrected or explicitly interpolated where the policy permits.
+
+## Compatibility with the 2026-10-23 draft
+
+The upstream draft makes the formerly optional `stages` array mandatory without
+changing file format version 1.0 or META schema 1. The reader now rejects files
+that omit it, including the former B/C reference vectors, as invalid. The encoder
+also rejects absent, empty or incomplete stage summaries rather than generating
+or silently repairing them. Updated B/C fixtures use revisions 12/13; vector A
+remains byte-for-byte unchanged. Historical B/C bytes are retained as rejection
+fixtures with their original provenance and checksums.
+
+Route Studio already generated all stage summaries, so existing application
+exports remain valid and identical content retains its bytes and revision.
+Processing, stage editing, filename handling and Bluetooth upload behavior are
+unchanged. No draft migration, route identity reset or forced revision increment
+is needed for this update.
 
 Existing local drafts retain edits and route identity. The small settings
 migration at the storage boundary changes the former elevation omission option to `source` and removes

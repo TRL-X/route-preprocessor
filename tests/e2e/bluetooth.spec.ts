@@ -285,7 +285,9 @@ test('preserves the device connection and directory across toggles and downloads
   const download = await downloading;
   expect(download.suggestedFilename()).toBe('Evening trail.RTE');
   const bytes = new Uint8Array(await readFile((await download.path())!));
-  expect(decodeRte(bytes).name).toBe('Bluetooth forest trail');
+  const route = decodeRte(bytes);
+  expect(route.name).toBe('Bluetooth forest trail');
+  expect(route.stages).toEqual([{ fromEventId: 1, toEventId: 2, minHDm: 1000, maxHDm: 1250 }]);
   await expect(send).toHaveAttribute('aria-expanded', 'true');
   await expect(upload).toContainText('Connected to Route test device');
   await expect(

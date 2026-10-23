@@ -183,20 +183,17 @@ function decodeMeta(value: CborValue): Omit<RouteData, 'routeId' | 'revision' | 
       actualLonE7: integer(entry.get(7), -LON, LON - 1, 'Station longitude'),
     };
   });
-  let stages: Stage[] | undefined;
-  if (root.has(8)) {
-    const stageValues = root.get(8);
-    array(stageValues, 1, 4095, 'Stages');
-    stages = stageValues.map((value, i) => {
-      const entry = structured(value as CborValue, [0, 1, 2, 3], `Stage ${i}`);
-      return {
-        fromEventId: integer(entry.get(0), 1, U32, 'Stage from event ID'),
-        toEventId: integer(entry.get(1), 1, U32, 'Stage to event ID'),
-        minHDm: integer(entry.get(2), I32_MIN, I32_MAX, 'Stage minimum elevation'),
-        maxHDm: integer(entry.get(3), I32_MIN, I32_MAX, 'Stage maximum elevation'),
-      };
-    });
-  }
+  const stageValues = root.get(8);
+  array(stageValues, 1, 4095, 'Stages');
+  const stages: Stage[] = stageValues.map((value, i) => {
+    const entry = structured(value as CborValue, [0, 1, 2, 3], `Stage ${i}`);
+    return {
+      fromEventId: integer(entry.get(0), 1, U32, 'Stage from event ID'),
+      toEventId: integer(entry.get(1), 1, U32, 'Stage to event ID'),
+      minHDm: integer(entry.get(2), I32_MIN, I32_MAX, 'Stage minimum elevation'),
+      maxHDm: integer(entry.get(3), I32_MIN, I32_MAX, 'Stage maximum elevation'),
+    };
+  });
   let magneticDeclination: MagneticDeclinationInfo | undefined;
   if (root.has(9)) {
     const info = structured(root.get(9), [0, 1, 2, 3, 4, 6, 7], 'META.magnetic_declination');
@@ -216,9 +213,9 @@ function decodeMeta(value: CborValue): Omit<RouteData, 'routeId' | 'revision' | 
     totalSDm,
     routeKind,
     stations,
+    stages,
     elevationInfo,
     ...(magneticDeclination ? { magneticDeclination } : {}),
-    ...(stages ? { stages } : {}),
   };
 }
 
@@ -257,21 +254,19 @@ function toMeta(route: RouteData): Map<number, CborValue> {
   if (e.datumName !== undefined) elevation.set(4, e.datumName);
   if (e.containsFilledValues !== undefined) elevation.set(5, e.containsFilledValues);
   meta.set(5, elevation);
-  if (route.stages !== undefined) {
-    array(route.stages, 1, 4095, 'Stages');
-    meta.set(
-      8,
-      route.stages.map((stage) => {
-        object(stage, 'Stage');
-        return map([
-          [0, stage.fromEventId],
-          [1, stage.toEventId],
-          [2, stage.minHDm],
-          [3, stage.maxHDm],
-        ]);
-      }),
-    );
-  }
+  array(route.stages, 1, 4095, 'Stages');
+  meta.set(
+    8,
+    route.stages.map((stage) => {
+      object(stage, 'Stage');
+      return map([
+        [0, stage.fromEventId],
+        [1, stage.toEventId],
+        [2, stage.minHDm],
+        [3, stage.maxHDm],
+      ]);
+    }),
+  );
   if (route.magneticDeclination !== undefined) {
     const d = route.magneticDeclination;
     validateMagneticDeclination(d);
@@ -393,35 +388,33 @@ export function validateRoute(route: RouteData): void {
       'Exactly one start and finish must be first and last, at 0 and S, and both stage boundaries.',
     );
   }
-  if (route.stages) {
-    if (route.stages.length !== boundaries.length - 1)
-      invalid('Stage cache must cover every consecutive boundary pair.');
-    let elevationIndex = 0;
-    for (let i = 0; i < route.stages.length; i++) {
-      const stage = route.stages[i];
-      if (
-        stage.fromEventId !== boundaries[i].eventId ||
-        stage.toEventId !== boundaries[i + 1].eventId
-      ) {
-        invalid('Stage cache has an incorrect boundary pair or order.');
-      }
-      let minimum = Infinity;
-      let maximum = -Infinity;
-      // Inclusive intervals share their endpoint; each sample is visited at most twice.
-      while (route.elev[elevationIndex].sDm < boundaries[i].sDm) elevationIndex++;
-      while (
-        elevationIndex < route.elev.length &&
-        route.elev[elevationIndex].sDm <= boundaries[i + 1].sDm
-      ) {
-        const node = route.elev[elevationIndex];
-        minimum = Math.min(minimum, node.hDm);
-        maximum = Math.max(maximum, node.hDm);
-        elevationIndex++;
-      }
-      elevationIndex--;
-      if (stage.minHDm !== minimum || stage.maxHDm !== maximum)
-        invalid('Stage cached elevation extrema are incorrect or missing.');
+  if (route.stages.length !== boundaries.length - 1)
+    invalid('Stage summaries must cover every consecutive boundary pair.');
+  let elevationIndex = 0;
+  for (let i = 0; i < route.stages.length; i++) {
+    const stage = route.stages[i];
+    if (
+      stage.fromEventId !== boundaries[i].eventId ||
+      stage.toEventId !== boundaries[i + 1].eventId
+    ) {
+      invalid('Stage summary has an incorrect boundary pair or order.');
     }
+    let minimum = Infinity;
+    let maximum = -Infinity;
+    // Inclusive intervals share their endpoint; each sample is visited at most twice.
+    while (route.elev[elevationIndex].sDm < boundaries[i].sDm) elevationIndex++;
+    while (
+      elevationIndex < route.elev.length &&
+      route.elev[elevationIndex].sDm <= boundaries[i + 1].sDm
+    ) {
+      const node = route.elev[elevationIndex];
+      minimum = Math.min(minimum, node.hDm);
+      maximum = Math.max(maximum, node.hDm);
+      elevationIndex++;
+    }
+    elevationIndex--;
+    if (stage.minHDm !== minimum || stage.maxHDm !== maximum)
+      invalid('Stage summary elevation extrema are incorrect or missing.');
   }
 }
 
