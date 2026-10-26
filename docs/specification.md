@@ -45,11 +45,11 @@ Processing, stage editing, filename handling and Bluetooth upload behavior are
 unchanged. No draft migration, route identity reset or forced revision increment
 is needed for this update.
 
-Existing local drafts retain edits and route identity. The small settings
-migration at the storage boundary changes the former elevation omission option to `source` and removes
-obsolete declination height data. Export history is preserved so new content
-receives a new revision instead of reusing an existing identity/revision pair.
-See [draft validation and supported versions](architecture.md#draft-boundary).
+Local drafts retain edits and route identity for the current draft version.
+Unsupported older drafts are rejected at the storage boundary without rewriting
+the stored record; users recover by re-importing the source file. Export history
+is preserved so new content receives a new revision instead of reusing an existing
+identity/revision pair. See [draft validation](architecture.md#draft-boundary).
 
 ## Update the implementation
 

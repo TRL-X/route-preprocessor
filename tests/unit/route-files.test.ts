@@ -48,6 +48,35 @@ function fixture() {
   return { editor, route: result.route };
 }
 
+async function putExportReservation(
+  routeId: string,
+  revision: number,
+  contentHash: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('trl-x-route-studio', 2);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts');
+      if (!db.objectStoreNames.contains('exports')) db.createObjectStore('exports');
+    };
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction('exports', 'readwrite');
+      transaction.objectStore('exports').put({ revision, contentHash }, routeId);
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error);
+      };
+    };
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal('indexedDB', new IDBFactory());
   vi.mocked(runWorkerTask).mockImplementation(
@@ -287,18 +316,6 @@ describe('route file operations', () => {
     expect(await reserveExportRevision(hex(editor.routeId), 'next-export')).toBe(1);
   });
 
-  it('reserves revisions above the restored draft ledger', async () => {
-    const { editor, route } = fixture();
-    const output = await prepareRouteExport(
-      editor,
-      route,
-      { [hex(editor.routeId)]: { revision: 7 } },
-      new AbortController().signal,
-    );
-    expect(decodeRte(output.bytes).revision).toBe(8);
-    expect(output.ledger[hex(editor.routeId)]).toEqual({ revision: 8 });
-  });
-
   it('uses a new identity when reservations cannot be persisted', async () => {
     const { editor, route } = fixture();
     const originalId = Uint8Array.from(editor.routeId);
@@ -320,13 +337,9 @@ describe('route file operations', () => {
 
   it('does not treat revision exhaustion as a storage failure', async () => {
     const { editor, route } = fixture();
+    await putExportReservation(hex(editor.routeId), 0xffffffff, 'previous-content');
     await expect(
-      prepareRouteExport(
-        editor,
-        route,
-        { [hex(editor.routeId)]: { revision: 0xffffffff } },
-        new AbortController().signal,
-      ),
+      prepareRouteExport(editor, route, {}, new AbortController().signal),
     ).rejects.toBeInstanceOf(RevisionExhaustedError);
   });
 

@@ -31,13 +31,46 @@ function openVersionOne(): Promise<IDBDatabase> {
   });
 }
 
-function putLegacyDraft(db: IDBDatabase, draft: unknown): Promise<void> {
+function putStoredDraft(db: IDBDatabase, draft: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('drafts', 'readwrite');
     transaction.objectStore('drafts').put(draft, 'current');
     transaction.oncomplete = () => resolve();
     transaction.onabort = () => reject(transaction.error);
     transaction.onerror = () => reject(transaction.error);
+  });
+}
+
+function putExportReservation(
+  routeId: string,
+  revision: number,
+  contentHash: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 2);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains('drafts')) db.createObjectStore('drafts');
+      if (!db.objectStoreNames.contains('exports')) db.createObjectStore('exports');
+    };
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction('exports', 'readwrite');
+      transaction.objectStore('exports').put({ revision, contentHash }, routeId);
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error);
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error);
+      };
+    };
   });
 }
 
@@ -80,21 +113,8 @@ describe('transactional export revision reservations', () => {
     expect(await reserveExportRevision('route-b', 'original')).toBe(1);
   });
 
-  it('advances beyond the legacy ledger when first migrating a route', async () => {
-    expect(await reserveExportRevision('route-a', 'canonical-hash', 7)).toBe(8);
-    expect(await reserveExportRevision('route-a', 'canonical-hash', 8)).toBe(8);
-    expect(await reserveExportRevision('route-a', 'new-content', 8)).toBe(9);
-  });
-
-  it('honors a newer legacy ledger from another migrating tab', async () => {
-    expect(await reserveExportRevision('route-a', 'tab-one', 2)).toBe(3);
-    expect(await reserveExportRevision('route-a', 'tab-two', 5)).toBe(6);
-  });
-
   it('does not wrap an exhausted revision and leaves its last reservation usable', async () => {
-    expect(await reserveExportRevision('route-a', 'last-content', MAX_REVISION - 1)).toBe(
-      MAX_REVISION,
-    );
+    await putExportReservation('route-a', MAX_REVISION, 'last-content');
     await expect(reserveExportRevision('route-a', 'changed-content')).rejects.toBeInstanceOf(
       RevisionExhaustedError,
     );
@@ -102,17 +122,11 @@ describe('transactional export revision reservations', () => {
       code: 'REVISION_EXHAUSTED',
     });
     expect(await reserveExportRevision('route-a', 'last-content')).toBe(MAX_REVISION);
-    await expect(
-      reserveExportRevision('legacy-exhausted', 'first-migration', MAX_REVISION),
-    ).rejects.toBeInstanceOf(RevisionExhaustedError);
   });
 
-  it('rejects invalid identities and legacy revisions without allocating', async () => {
+  it('rejects invalid identities without allocating', async () => {
     await expect(reserveExportRevision('', 'hash')).rejects.toThrow('nonempty');
     await expect(reserveExportRevision('route-a', '')).rejects.toThrow('nonempty');
-    for (const revision of [-1, 0.5, MAX_REVISION + 1, NaN]) {
-      await expect(reserveExportRevision('route-a', 'hash', revision)).rejects.toThrow('range');
-    }
     expect(await reserveExportRevision('route-a', 'hash')).toBe(1);
   });
 
@@ -153,27 +167,6 @@ function currentDraft(): Draft {
   };
 }
 
-function legacyDraft(version: 1 | 2) {
-  const draft = currentDraft();
-  return {
-    ...draft,
-    version,
-    editor: {
-      ...draft.editor,
-      options: { ...draft.editor.options, elevationMode: 'omit' },
-      magneticDeclination: {
-        declinationCdeg: 0,
-        referenceLatE7: 0,
-        referenceLonE7: 0,
-        referenceDate: '2026-10-17',
-        source: 'manual',
-        referenceHeightDm: 123,
-      },
-    },
-    ledger: { ...draft.ledger, earlierRoute: { revision: 19, hash: 'old-hash' } },
-  };
-}
-
 async function readStoredDraft(): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME);
@@ -193,32 +186,7 @@ async function readStoredDraft(): Promise<unknown> {
   });
 }
 
-describe('draft schema and migration', () => {
-  it.each([1, 2] as const)(
-    'migrates version %i without mutating edits, identity or revision history',
-    (version) => {
-      const legacy = legacyDraft(version);
-      const migrated = parseDraft(legacy);
-      expect(migrated.version).toBe(DRAFT_VERSION);
-      expect(migrated.editor.options).toEqual({
-        ...legacy.editor.options,
-        elevationMode: 'source',
-      });
-      expect(migrated.editor.magneticDeclination).toEqual({
-        declinationCdeg: 0,
-        referenceLatE7: 0,
-        referenceLonE7: 0,
-        referenceDate: '2026-10-17',
-        source: 'manual',
-      });
-      expect(migrated.editor.routeId).toEqual(legacy.editor.routeId);
-      expect(migrated.editor.stations).toEqual(legacy.editor.stations);
-      expect(migrated.ledger).toEqual(legacy.ledger);
-      expect(legacy.editor.options.elevationMode).toBe('omit');
-      expect(legacy.editor.magneticDeclination.referenceHeightDm).toBe(123);
-    },
-  );
-
+describe('draft schema', () => {
   it('keeps current settings and optional declination fields unchanged', () => {
     const draft = currentDraft();
     expect(parseDraft(draft)).toEqual(draft);
@@ -226,35 +194,6 @@ describe('draft schema and migration', () => {
     expect(parseDraft(draft).editor.declinationMode).toBeUndefined();
     expect(parseDraft(draft).editor.declinationQueryDate).toBeUndefined();
   });
-
-  it.each([1, 2] as const)(
-    'restores string warnings from version %i without losing the editor or history',
-    (version) => {
-      const draft = legacyDraft(version);
-      const legacy = {
-        ...draft,
-        editor: {
-          ...draft.editor,
-          file: {
-            ...draft.editor.file,
-            warnings: [
-              'Check the source heights.',
-              { code: 'IMPORT_MULTIPLE_SEGMENTS', params: { count: 2 } },
-            ],
-          },
-        },
-      };
-      const migrated = parseDraft(legacy);
-      expect(migrated.editor.file.warnings).toEqual([
-        { code: 'import', message: 'Check the source heights.' },
-        { code: 'IMPORT_MULTIPLE_SEGMENTS', params: { count: 2 } },
-      ]);
-      expect(migrated.editor.name).toBe(legacy.editor.name);
-      expect(migrated.editor.routeId).toEqual(legacy.editor.routeId);
-      expect(migrated.ledger).toEqual(legacy.ledger);
-      expect(legacy.editor.file.warnings[0]).toBe('Check the source heights.');
-    },
-  );
 
   it('round-trips incomplete and invalid editable values for later processing diagnostics', async () => {
     const draft = currentDraft();
@@ -480,35 +419,17 @@ describe('draft schema and migration', () => {
     for (const draft of malformed) expect(() => parseDraft(draft)).toThrow('Invalid saved draft');
   });
 
-  it('does not apply legacy settings migration to the current version', () => {
-    expect(() => parseDraft({ ...legacyDraft(2), version: DRAFT_VERSION })).toThrow(
-      'editor.options.elevationMode',
-    );
-  });
-
-  it.each([0, DRAFT_VERSION + 1, '2', undefined])('rejects unsupported version %s', (version) => {
-    expect(() => parseDraft({ ...currentDraft(), version })).toThrow(
-      'Unsupported saved draft version',
-    );
-  });
+  it.each([0, 1, 2, DRAFT_VERSION + 1, '2', undefined])(
+    'rejects unsupported version %s',
+    (version) => {
+      expect(() => parseDraft({ ...currentDraft(), version })).toThrow(
+        'Unsupported saved draft version',
+      );
+    },
+  );
 });
 
-describe('draft storage migration', () => {
-  it('preserves old draft data and revision history through the database upgrade', async () => {
-    const oldDatabase = await openVersionOne();
-    const legacy = legacyDraft(1);
-    await putLegacyDraft(oldDatabase, legacy);
-    oldDatabase.close();
-    expect(await reserveExportRevision(ROUTE_KEY, 'new-hash', 7)).toBe(8);
-    const migrated = await loadDraft();
-    expect(migrated).toEqual(parseDraft(legacy));
-    expect(await readStoredDraft()).toEqual(legacy);
-    const updated = { ...migrated!, savedAt: 4321 };
-    await saveDraft(updated);
-    expect(await loadDraft()).toEqual(updated);
-    expect(await reserveExportRevision(ROUTE_KEY, 'new-hash')).toBe(8);
-  });
-
+describe('draft storage', () => {
   it('supports fresh installation without an existing draft', async () => {
     expect(await loadDraft()).toBeNull();
     const draft = currentDraft();
@@ -518,6 +439,7 @@ describe('draft storage migration', () => {
   });
 
   it.each([
+    ['old version', () => ({ ...currentDraft(), version: 1 }), 'Unsupported saved draft version'],
     [
       'future version',
       () => ({ ...currentDraft(), version: DRAFT_VERSION + 1 }),
@@ -531,11 +453,11 @@ describe('draft storage migration', () => {
   ])('leaves the stored record intact after rejecting %s', async (_label, record, message) => {
     const db = await openVersionOne();
     const stored = record();
-    await putLegacyDraft(db, stored);
+    await putStoredDraft(db, stored);
     db.close();
     await expect(loadDraft()).rejects.toThrow(message);
     expect(await readStoredDraft()).toEqual(stored);
-    expect(await reserveExportRevision(ROUTE_KEY, 'next', 7)).toBe(8);
+    expect(await reserveExportRevision(ROUTE_KEY, 'next')).toBe(1);
   });
 
   it('leaves a saved draft intact when a new write is malformed', async () => {
@@ -547,7 +469,7 @@ describe('draft storage migration', () => {
     expect(await loadDraft()).toEqual(draft);
   });
 
-  it('reports a blocked migration instead of leaving the caller pending', async () => {
+  it('reports a blocked database upgrade instead of leaving the caller pending', async () => {
     const oldDatabase = await openVersionOne();
     try {
       await expect(reserveExportRevision('route-a', 'hash')).rejects.toThrow(

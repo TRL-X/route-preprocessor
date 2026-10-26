@@ -1,5 +1,5 @@
 import { parseDraft } from './draft-schema';
-import { DRAFT_VERSION, type Draft } from './editor';
+import type { Draft } from './editor';
 
 export { DRAFT_VERSION } from './editor';
 export type { Draft, Editor, Ledger } from './editor';
@@ -56,16 +56,9 @@ function database(): Promise<IDBDatabase> {
  * Reserve revisions atomically across tabs. Failed exports may leave gaps.
  * Hash canonical bytes with a fixed revision so identical content reuses its reservation.
  */
-export async function reserveExportRevision(
-  routeId: string,
-  contentHash: string,
-  legacyRevision = 0,
-): Promise<number> {
+export async function reserveExportRevision(routeId: string, contentHash: string): Promise<number> {
   if (!routeId || !contentHash || typeof routeId !== 'string' || typeof contentHash !== 'string') {
     throw new Error('Export route identity and content hash must be nonempty strings.');
-  }
-  if (!Number.isInteger(legacyRevision) || legacyRevision < 0 || legacyRevision > MAX_REVISION) {
-    throw new Error('The previous export revision is outside the supported range.');
   }
   const db = await database();
   try {
@@ -101,8 +94,7 @@ export async function reserveExportRevision(
             revision = existing.revision;
             return;
           }
-          // An upgrading tab may carry a newer revision in its draft ledger.
-          const previous = Math.max(existing?.revision ?? 0, legacyRevision);
+          const previous = existing?.revision ?? 0;
           if (previous === MAX_REVISION) throw new RevisionExhaustedError();
           revision = previous + 1;
           store.put({ revision, contentHash } satisfies ExportReservation, routeId);
@@ -119,8 +111,6 @@ export async function reserveExportRevision(
 
 export async function saveDraft(value: Draft): Promise<void> {
   const draft = parseDraft(value);
-  if (value.version !== DRAFT_VERSION)
-    throw new Error(`New drafts must use version ${DRAFT_VERSION}.`);
   const db = await database();
   try {
     await new Promise<void>((resolve, reject) => {
