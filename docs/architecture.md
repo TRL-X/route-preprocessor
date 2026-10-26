@@ -14,7 +14,7 @@ layouts share the same editing model and processing rules.
 | `src/app/useRouteFiles.ts`                     | File operation status, output filename, cancellation and export feedback            |
 | `src/app/route-files.ts`                       | Import, rebuild, filename validation, revision allocation, encoding and downloads   |
 | `src/app/editor.ts`                            | Editor, revision ledger and versioned draft types                                   |
-| `src/app/draft-schema.ts`                      | Draft validation and supported migrations                                           |
+| `src/app/draft-schema.ts`                      | Draft validation and supported version                                              |
 | `src/app/flow.ts`                              | Wizard completion, navigation, confirmation invalidation and issue ownership        |
 | `src/app/worker-client.ts`                     | Worker creation, results and cancellation                                           |
 | `src/app/drafts.ts`                            | IndexedDB drafts and export revision reservations                                   |
@@ -173,14 +173,10 @@ have safe coordinates, distances, indices and array sizes. Editable values may
 still be incomplete or invalid for export, including empty names and unfinished
 numeric input; processing reports those errors after restoration.
 
-New writes use draft version 3. Versions 1 and 2 are supported only at the read
-boundary: their settings are migrated in memory, and the next successful save
-writes version 3. Loading never rewrites the stored record. Invalid structures and
-unknown versions produce a visible error while leaving the original record intact.
-
-The supported legacy versions are explicit in the schema. Retire them only with a
-documented recovery path for existing users, such as re-importing the original
-source file. There is no date-based expiry or fallback for an unknown version.
+New writes use draft version 3. Only that version is supported: older or unknown
+versions produce a visible error while leaving the original record intact. Users
+recover by re-importing the original GPX or KML source; there is no in-place
+migration, date-based expiry or fallback for an unsupported version.
 
 ## Route identity and revisions
 

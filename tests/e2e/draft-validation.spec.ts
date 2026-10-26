@@ -7,7 +7,7 @@ const source =
   '<trkpt lat="0" lon="0.001"><ele>20</ele></trkpt>' +
   '</trkseg></trk></gpx>';
 
-for (const corruption of ['future version', 'invalid reference'] as const) {
+for (const corruption of ['old version', 'future version', 'invalid reference'] as const) {
   test(`rejects a draft with ${corruption} without overwriting it or blocking import`, async ({
     page,
   }) => {
@@ -33,7 +33,8 @@ for (const corruption of ['future version', 'invalid reference'] as const) {
             let snapshot = '';
             current.onsuccess = () => {
               const draft = current.result;
-              if (corruption === 'future version') draft.version = version + 1;
+              if (corruption === 'old version') draft.version = 1;
+              else if (corruption === 'future version') draft.version = version + 1;
               else draft.editor.reference.points[0].s = 'not-a-distance';
               snapshot = JSON.stringify(draft);
               store.put(draft, 'current');

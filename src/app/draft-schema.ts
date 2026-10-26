@@ -204,50 +204,18 @@ function validateEditor(value: unknown): void {
   }
 }
 
-/** Versions 1 and 2 share one migration; unknown versions require explicit support. */
+/** Only the current draft version is supported; unsupported records require re-importing the source. */
 export function parseDraft(value: unknown): Draft {
   const stored = object(value, 'draft');
-  if (![1, 2, DRAFT_VERSION].includes(stored.version as number)) {
-    throw new Error(
-      `Unsupported saved draft version ${String(stored.version)}. Supported versions: 1, 2, ${DRAFT_VERSION}.`,
-    );
-  }
-  let draft = stored;
   if (stored.version !== DRAFT_VERSION) {
-    const editor = object(stored.editor, 'editor');
-    const file = object(editor.file, 'editor.file');
-    const warnings = array(
-      file.warnings,
-      'editor.file.warnings',
-      0,
-      IMPORT_LIMITS.maxXmlElements,
-    ).map((warning) =>
-      typeof warning === 'string' ? { code: 'import', message: warning } : warning,
+    throw new Error(
+      `Unsupported saved draft version ${String(stored.version)}. Supported version: ${DRAFT_VERSION}.`,
     );
-    const options = object(editor.options, 'editor.options');
-    const magneticDeclination =
-      editor.magneticDeclination === undefined
-        ? undefined
-        : { ...object(editor.magneticDeclination, 'editor.magneticDeclination') };
-    if (magneticDeclination) delete magneticDeclination.referenceHeightDm;
-    draft = {
-      ...stored,
-      version: DRAFT_VERSION,
-      editor: {
-        ...editor,
-        file: { ...file, warnings },
-        options: {
-          ...options,
-          elevationMode: options.elevationMode === 'omit' ? 'source' : options.elevationMode,
-        },
-        ...(magneticDeclination ? { magneticDeclination } : {}),
-      },
-    };
   }
-  validateEditor(draft.editor);
-  finite(draft.savedAt, 'savedAt', 0);
-  const ledger = object(draft.ledger, 'ledger');
+  validateEditor(stored.editor);
+  finite(stored.savedAt, 'savedAt', 0);
+  const ledger = object(stored.ledger, 'ledger');
   for (const [key, entry] of Object.entries(ledger))
     integer(object(entry, `ledger.${key}`).revision, `ledger.${key}.revision`, 1, UINT32_MAX);
-  return draft as unknown as Draft;
+  return stored as unknown as Draft;
 }

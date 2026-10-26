@@ -127,7 +127,7 @@ export async function prepareRouteExport(
   let outputId = editor.routeId;
   let persisted = true;
   try {
-    revision = await reserveExportRevision(key, hash, ledger[key]?.revision ?? 0);
+    revision = await reserveExportRevision(key, hash);
   } catch (error) {
     if (error instanceof RevisionExhaustedError) throw error;
     // A fresh identity prevents revision reuse when storage is unavailable.
